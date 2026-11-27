@@ -5,7 +5,8 @@ application, one PostgreSQL database, **one Universal Estimating Engine**
 shared by all 19 estimating modules.
 
 Phases 1–2 deliver the engine and its foundations; phase 3 connects all 19
-modules and adds sign-in with role permissions. See
+modules and adds sign-in with role permissions; phase 4 adds Excel/PDF export
+and the editing screens. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and for what is
 not built yet.
 
@@ -31,6 +32,14 @@ not built yet.
   consolidation by module, trade, building, floor, zone, room and basement; cost per m².
 - REST API and a Next.js app: sign-in, projects, estimates (items, BOQ, consolidation,
   approval), formula library, unit converter and module pages.
+- Estimate editor: add or recalculate items through the engine, bulk entry
+  (one item per line), sortable/filterable item grid with keyboard navigation.
+- Library screens for prices, materials, labor rates, crews, productivity,
+  equipment rates and assemblies, at master or project scope.
+- Excel export (Summary, BOQ, Items, Materials, Labor, Equipment, By trade,
+  By floor, with live SUM formulas) and PDF export (executive summary, trade
+  analysis, BOQ), both built from the same report data and logged per export.
+  Draft estimates are labelled DRAFT.
 
 ## Acceptance tests (spec §12)
 

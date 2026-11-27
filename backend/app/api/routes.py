@@ -7,7 +7,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +26,7 @@ from ..modules.registry import MODULES
 from ..services import estimates as est
 from ..services import library as lib
 from ..services import projects as wbs_svc
+from ..services import reports as rpt
 from ..services import users as user_svc
 from ..services.ratebook import SqlAssemblyResolver, SqlFormulaResolver
 from .deps import DB, CurrentUser, library_scope, project_access, require_global
@@ -580,7 +581,11 @@ def _item_out(it: m.EstimateItemRecord) -> dict:
     return {"item_key": it.item_key, "module": it.module, "item_type": it.item_type, "trade": it.trade,
             "description": it.description, "quantity": it.breakdown["quantity"], "unit": it.unit,
             "unit_rate": it.breakdown["totals"]["unit_rate"], "amount": it.breakdown["totals"]["total"],
-            "inputs": it.inputs, "breakdown": it.breakdown}
+            "inputs": it.inputs, "condition": it.condition, "priced_item_code": it.priced_item_code,
+            "building_id": str(it.building_id) if it.building_id else None,
+            "floor_id": str(it.floor_id) if it.floor_id else None,
+            "zone_id": str(it.zone_id) if it.zone_id else None,
+            "room_id": str(it.room_id) if it.room_id else None, "breakdown": it.breakdown}
 
 
 @router.post("/projects/{project_id}/versions/{version_id}/items")
@@ -661,3 +666,112 @@ def compare(project_id: uuid.UUID, old: uuid.UUID, new: uuid.UUID, user: Current
     _version(s, project_id, old)
     _version(s, project_id, new)
     return jsonable(est.compare_versions(s, old, new))
+
+
+# ---------------------------------------------------------------- exports
+
+
+def _export(project_id: uuid.UUID, version_id: uuid.UUID, user, s: Session, kind: str) -> Response:
+    project_access(s, user, project_id)
+    v = _version(s, project_id, version_id)
+    data = rpt.estimate_report_data(s, version_id)
+    if kind == "xlsx":
+        body, media = rpt.to_excel(data), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        body, media = rpt.to_pdf(data), "application/pdf"
+    rpt.record_report(s, version_id, f"estimate.{kind}", data, user.email)
+    p = s.get(m.Project, project_id)
+    name = f"{p.code}_estimate_v{v.version_no}_{v.status}.{kind}".replace(" ", "_")
+    return Response(body, media_type=media, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@router.get("/projects/{project_id}/versions/{version_id}/export.xlsx")
+def export_xlsx(project_id: uuid.UUID, version_id: uuid.UUID, user: CurrentUser, s: DB):
+    return _export(project_id, version_id, user, s, "xlsx")
+
+
+@router.get("/projects/{project_id}/versions/{version_id}/export.pdf")
+def export_pdf(project_id: uuid.UUID, version_id: uuid.UUID, user: CurrentUser, s: DB):
+    return _export(project_id, version_id, user, s, "pdf")
+
+
+# ---------------------------------------------------------------- library listings (for the library screens)
+
+
+def _scope_filter(col, project_id):
+    return col.is_(None) | (col == project_id) if project_id else col.is_(None)
+
+
+def _scope(row) -> str:
+    return "project" if row.project_id else "master"
+
+
+@router.get("/library/materials")
+def list_materials(user: CurrentUser, s: DB, project_id: uuid.UUID | None = None):
+    if project_id:
+        project_access(s, user, project_id)
+    q = select(m.Material).where(_scope_filter(m.Material.project_id, project_id)).order_by(m.Material.code)
+    return [{"id": str(r.id), "code": r.code, "description": r.description, "unit": r.unit, "category": r.category,
+             "scope": _scope(r)} for r in s.scalars(q)]
+
+
+@router.get("/library/labor-rates")
+def list_labor_rates(user: CurrentUser, s: DB, project_id: uuid.UUID | None = None):
+    if project_id:
+        project_access(s, user, project_id)
+    q = select(m.LaborRate).where(_scope_filter(m.LaborRate.project_id, project_id))
+    return jsonable([{"id": r.id, "labor_class": r.labor_class_code, "hourly_rate": r.hourly_rate, "currency": r.currency,
+                      "valid_from": r.valid_from, "valid_to": r.valid_to, "scope": _scope(r)}
+                     for r in s.scalars(q.order_by(m.LaborRate.labor_class_code, m.LaborRate.valid_from))])
+
+
+@router.get("/library/crews")
+def list_crews(user: CurrentUser, s: DB, project_id: uuid.UUID | None = None):
+    if project_id:
+        project_access(s, user, project_id)
+    q = select(m.CrewComposition).where(_scope_filter(m.CrewComposition.project_id, project_id))
+    return jsonable([{"id": c.id, "code": c.code, "name": c.name, "revision": c.revision, "scope": _scope(c),
+                      "members": [{"labor_class": x.labor_class_code, "count": x.count} for x in c.members]}
+                     for c in s.scalars(q.order_by(m.CrewComposition.code, m.CrewComposition.revision))])
+
+
+@router.get("/library/productivity")
+def list_productivity(user: CurrentUser, s: DB, project_id: uuid.UUID | None = None):
+    if project_id:
+        project_access(s, user, project_id)
+    q = select(m.ProductivityRate).where(_scope_filter(m.ProductivityRate.project_id, project_id))
+    return jsonable([{"id": r.id, "code": r.code, "condition": r.condition, "output_per_crew_day": r.output_per_crew_day,
+                      "unit": r.unit, "revision": r.revision, "scope": _scope(r)}
+                     for r in s.scalars(q.order_by(m.ProductivityRate.code, m.ProductivityRate.condition))])
+
+
+@router.get("/library/equipment-rates")
+def list_equipment_rates(user: CurrentUser, s: DB, project_id: uuid.UUID | None = None):
+    if project_id:
+        project_access(s, user, project_id)
+    q = select(m.EquipmentRate).where(_scope_filter(m.EquipmentRate.project_id, project_id))
+    return jsonable([{"id": r.id, "equipment_code": r.equipment_code, "rental_per_hour": r.rental_per_hour,
+                      "fuel_litres_per_hour": r.fuel_litres_per_hour, "fuel_item_code": r.fuel_item_code,
+                      "operating_per_hour": r.operating_per_hour, "currency": r.currency, "valid_from": r.valid_from,
+                      "scope": _scope(r)} for r in s.scalars(q.order_by(m.EquipmentRate.equipment_code))])
+
+
+@router.get("/library/assemblies")
+def list_assemblies(user: CurrentUser, s: DB, project_id: uuid.UUID | None = None):
+    if project_id:
+        project_access(s, user, project_id)
+    q = select(m.AssemblyRecord).where(_scope_filter(m.AssemblyRecord.project_id, project_id)).order_by(m.AssemblyRecord.code)
+    out = []
+    for a in s.scalars(q):
+        rev = a.revisions[-1] if a.revisions else None
+        out.append({
+            "id": str(a.id), "code": a.code, "description": a.description, "trade": a.trade, "unit": a.unit,
+            "scope": _scope(a), "revision": rev.revision if rev else None,
+            "components": jsonable([
+                {k: getattr(c, k) for k in ("kind", "description", "item_code", "consumption", "unit", "wastage_pct",
+                                            "category", "task", "crew_code", "productivity_code", "equipment_code",
+                                            "basis", "hours_per_unit", "labor_task", "count")}
+                for c in (rev.components if rev else [])
+            ]),
+        })
+    return out

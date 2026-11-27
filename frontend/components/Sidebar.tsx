@@ -41,6 +41,7 @@ export default function Sidebar() {
       <nav className="space-y-0.5">
         {link("/", "Overview")}
         {link("/projects", "Projects")}
+        {link("/library", "Library")}
         {link("/formulas", "Formula library")}
         {link("/units", "Unit converter")}
       </nav>

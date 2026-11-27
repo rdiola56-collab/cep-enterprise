@@ -88,3 +88,23 @@ export function qty(v: string | null | undefined): string {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 3 }) : v;
 }
+
+export async function download(path: string, fallbackName: string) {
+  const token = getToken();
+  const res = await fetch(`/api${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(typeof body.detail === "string" ? body.detail : `Download failed (${res.status})`, res.status);
+  }
+  const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export type WbsFloor = { id: string; code: string; name: string; level: number; is_basement: boolean;
+  rooms: { id: string; code: string; name: string }[]; zones: { id: string; code: string; name: string }[] };
+export type WbsBuilding = { id: string; code: string; name: string; floors: WbsFloor[] };

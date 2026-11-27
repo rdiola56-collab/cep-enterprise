@@ -27,7 +27,9 @@ export default function ModulePage({ params }: { params: Promise<{ code: string 
       {mod.kind !== "estimating" ? (
         <div className="panel p-4 text-sm">
           This is a {mod.kind} workspace over the shared services ({mod.services.join(", ")}).
-          {mod.kind === "reporting" ? " Open an estimate under Projects to see the BOQ and consolidations." : " Records are maintained through the library API; the editing screen is not built yet."}
+          {mod.kind === "reporting" ? " Open an estimate under Projects to see the BOQ, consolidations and Excel/PDF export." : (
+            <> Open the <a className="text-[var(--accent)] underline" href={`/library?tab=${mod.code === "materials_pricelist" ? "prices" : "labor"}`}>library</a> to view and add records.</>
+          )}
         </div>
       ) : (
         mod.item_types.map((it) => {

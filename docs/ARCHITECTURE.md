@@ -8,7 +8,7 @@ network calls. There are no microservices at this stage.
 
 | # | Layer | Code | Status |
 |---|-------|------|--------|
-| 1 | Presentation | `frontend/`, `backend/app/api/` (HTTP boundary, permissions) | Sign-in, projects, estimate views (items, BOQ, consolidation, approve), formula library, module pages |
+| 1 | Presentation | `frontend/`, `backend/app/api/` (HTTP boundary, permissions) | Sign-in, projects, estimate editor (items, bulk entry, BOQ, consolidation, approve, export), library editors, formula library, module pages |
 | 2 | Project management | `services/projects.py`, `services/users.py`, `auth/` | Projects, members and roles, WBS; WBS has API only, no editing screen |
 | 3 | Estimating modules | `app/modules/registry.py` | All 19 configured: 16 estimating (39 item types), 2 library, 1 reporting |
 | 4 | Universal quantity calculation | `app/engine/units.py`, `app/engine/formula/` | Built and tested |
@@ -16,7 +16,7 @@ network calls. There are no microservices at this stage.
 | 6 | Cost calculation | `app/engine/costing.py`, `app/engine/rates.py` | Built and tested |
 | 7 | Database and data access | `app/db/`, `services/ratebook.py`, `migrations/` | Built and tested |
 | 8 | Drawing and BIM integration | `drawing_references`, `bim_elements` tables only | **Not built** (phase 5) |
-| 9 | Reporting and export | `services/estimates.py` (BOQ, cost and resource summaries) | Data built; Excel/PDF export **not built** |
+| 9 | Reporting and export | `services/estimates.py`, `services/reports.py` | BOQ, summaries, Excel (openpyxl) and PDF (ReportLab) export built and tested |
 
 ## The one calculation path
 
@@ -125,7 +125,6 @@ clear error instead of a made-up figure.
 
 - Bluebeam, PDF takeoff, DWG/DXF, IFC and Revit: no adapters or import pipeline
   yet. Only the reference tables exist.
-- Excel/PDF export, Celery jobs (Redis is in docker-compose for that later).
-- Editing screens: Excel-like item grid, WBS tree, assembly/material/labor
-  library editors. These exist as API endpoints only.
+- Celery jobs (Redis is in docker-compose for that later); exports run in the request.
+- WBS tree editing screen (buildings/floors/zones/rooms have API endpoints only).
 - Single sign-on, password reset, account lockout after failed attempts.

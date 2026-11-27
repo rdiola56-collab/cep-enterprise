@@ -1,12 +1,15 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
-import { api, money, qty } from "@/lib/api";
+import { use, useEffect, useMemo, useState } from "react";
+import BulkEntry from "@/components/BulkEntry";
+import ItemEditor, { type EditableItem } from "@/components/ItemEditor";
+import { api, download, money, qty } from "@/lib/api";
 
-type Item = { item_key: string; module: string; trade: string; description: string; quantity: string; unit: string; unit_rate: string; amount: string };
+type Item = EditableItem & { trade: string; quantity: string; unit: string; unit_rate: string; amount: string };
 type BoqLine = { line_no: number; trade: string; assembly_code: string; description: string; unit: string; quantity: string; unit_rate: string; amount: string };
 type Summary = { status: string; totals: Record<string, string> };
 type Group = Record<string, string | number>;
+type SortKey = "item_key" | "module" | "description" | "quantity" | "amount";
 
 const VIEWS = ["items", "boq", "floor", "trade", "module"] as const;
 
@@ -19,6 +22,8 @@ export default function VersionPage({ params }: { params: Promise<{ pid: string;
   const [groups, setGroups] = useState<Group[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [filter, setFilter] = useState("");
+  const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "item_key", desc: false });
+  const [editing, setEditing] = useState<Item | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = () => {
@@ -31,38 +36,77 @@ export default function VersionPage({ params }: { params: Promise<{ pid: string;
     if (view === "floor" || view === "trade" || view === "module") {
       api<Group[]>(`${base}/consolidate?by=${view}`).then(setGroups).catch((e) => setError(e.message));
     }
-  }, [view, base]);
+  }, [view, base, items]);
 
-  async function approve() {
+  const locked = summary !== null && summary.status !== "draft";
+
+  async function act(fn: () => Promise<unknown>) {
     setError(null);
     try {
-      await api(`${base}/approve`, { method: "POST" });
+      await fn();
       load();
     } catch (err) {
       setError((err as Error).message);
     }
   }
 
-  const shown = items.filter((i) => `${i.item_key} ${i.description} ${i.module} ${i.trade}`.toLowerCase().includes(filter.toLowerCase()));
+  const remove = (key: string) =>
+    act(() => api(`${base}/items/${encodeURIComponent(key)}`, { method: "DELETE" }));
+
+  const shown = useMemo(() => {
+    const f = filter.toLowerCase();
+    const rows = items.filter((i) => `${i.item_key} ${i.description} ${i.module} ${i.trade}`.toLowerCase().includes(f));
+    const num = sort.key === "quantity" || sort.key === "amount";
+    rows.sort((a, b) => {
+      const r = num ? Number(a[sort.key]) - Number(b[sort.key]) : String(a[sort.key]).localeCompare(String(b[sort.key]));
+      return sort.desc ? -r : r;
+    });
+    return rows;
+  }, [items, filter, sort]);
+
+  const th = (key: SortKey, label: string, num = false) => (
+    <th className={`cursor-pointer select-none ${num ? "num" : ""}`}
+      onClick={() => setSort({ key, desc: sort.key === key ? !sort.desc : false })}>
+      {label}{sort.key === key ? (sort.desc ? " ▾" : " ▴") : ""}
+    </th>
+  );
+
+  function onRowKey(e: React.KeyboardEvent<HTMLTableRowElement>, i: Item) {
+    const row = e.currentTarget;
+    if (e.key === "ArrowDown") (row.nextElementSibling as HTMLElement | null)?.focus();
+    else if (e.key === "ArrowUp") (row.previousElementSibling as HTMLElement | null)?.focus();
+    else if (e.key === "Enter" && !locked) setEditing(i);
+    else if (e.key === "Delete" && !locked) remove(i.item_key);
+    else return;
+    e.preventDefault();
+  }
+
   const t = summary?.totals ?? {};
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Detailed estimate <span className="muted text-sm">({summary?.status ?? "…"})</span></h1>
-        {summary?.status === "draft" && <button className="btn text-sm" onClick={approve}>Approve version</button>}
+      <div className="flex flex-wrap items-center gap-2">
+        <h1 className="mr-auto text-xl font-semibold">
+          Detailed estimate <span className="muted text-sm">({summary?.status ?? "…"})</span>
+        </h1>
+        <button className="panel px-3 py-1 text-sm" onClick={() => act(() => download(`${base}/export.xlsx`, "estimate.xlsx"))}>Export Excel</button>
+        <button className="panel px-3 py-1 text-sm" onClick={() => act(() => download(`${base}/export.pdf`, "estimate.pdf"))}>Export PDF</button>
+        {summary?.status === "draft" && <button className="btn text-sm" onClick={() => act(() => api(`${base}/approve`, { method: "POST" }))}>Approve version</button>}
       </div>
       {error && <div className="text-sm text-red-500">{error}</div>}
+      {locked && <div className="panel p-3 text-sm">This version is {summary?.status} and locked. Create a revision to change it.</div>}
       <section className="panel grid grid-cols-3 gap-4 p-4 text-sm md:grid-cols-6">
         {["material", "labor", "equipment", "direct", "overhead", "total"].map((k) => (
           <div key={k}><div className="muted text-xs capitalize">{k}</div><div className="font-mono">{money(t[k])}</div></div>
         ))}
       </section>
+      <ItemEditor pid={pid} base={base} editing={editing} locked={locked}
+        onSaved={() => { setEditing(null); load(); }} onCancel={() => setEditing(null)} />
       <div className="flex items-center gap-1 text-sm">
         {VIEWS.map((v) => (
           <button key={v} onClick={() => setView(v)}
             className={`rounded px-3 py-1 ${view === v ? "bg-[var(--accent)] text-white" : "panel"}`}>
-            {v === "boq" ? "BOQ" : v === "items" ? "Items" : `By ${v}`}
+            {v === "boq" ? "BOQ" : v === "items" ? `Items (${items.length})` : `By ${v}`}
           </button>
         ))}
         {view === "items" && <input className="field ml-auto w-64" placeholder="Filter items" value={filter} onChange={(e) => setFilter(e.target.value)} />}
@@ -70,10 +114,16 @@ export default function VersionPage({ params }: { params: Promise<{ pid: string;
       <section className="panel overflow-x-auto">
         {view === "items" && (
           <table className="datagrid">
-            <thead><tr><th>Item</th><th>Module</th><th>Description</th><th className="num">Quantity</th><th>Unit</th><th className="num">Unit rate</th><th className="num">Amount</th></tr></thead>
+            <thead><tr>{th("item_key", "Item")}{th("module", "Module")}{th("description", "Description")}{th("quantity", "Quantity", true)}<th>Unit</th><th className="num">Unit rate</th>{th("amount", "Amount", true)}<th /></tr></thead>
             <tbody>{shown.map((i) => (
-              <tr key={i.item_key}><td className="font-mono text-xs">{i.item_key}</td><td>{i.module}</td><td>{i.description}</td>
-                <td className="num">{qty(i.quantity)}</td><td>{i.unit}</td><td className="num">{money(i.unit_rate)}</td><td className="num">{money(i.amount)}</td></tr>
+              <tr key={i.item_key} tabIndex={0} onKeyDown={(e) => onRowKey(e, i)} onDoubleClick={() => !locked && setEditing(i)}
+                className={`outline-none focus:bg-[var(--bg)] ${editing?.item_key === i.item_key ? "bg-[var(--bg)]" : ""}`}>
+                <td className="font-mono text-xs">{i.item_key}</td><td>{i.module}</td><td>{i.description}</td>
+                <td className="num">{qty(i.quantity)}</td><td>{i.unit}</td><td className="num">{money(i.unit_rate)}</td><td className="num">{money(i.amount)}</td>
+                <td className="whitespace-nowrap text-xs">{!locked && <>
+                  <button className="underline" onClick={() => setEditing(i)}>Edit</button>{" "}
+                  <button className="text-red-500 underline" onClick={() => remove(i.item_key)}>Delete</button></>}
+                </td></tr>
             ))}</tbody>
           </table>
         )}
@@ -96,6 +146,8 @@ export default function VersionPage({ params }: { params: Promise<{ pid: string;
           </table>
         )}
       </section>
+      <p className="muted text-xs">Keyboard: ↑/↓ move between rows, Enter edits, Delete removes. Double-click a row to edit.</p>
+      {!locked && <BulkEntry base={base} onDone={load} />}
     </div>
   );
 }
