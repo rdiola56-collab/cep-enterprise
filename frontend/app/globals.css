@@ -30,6 +30,6 @@ body {
 .muted { color: var(--muted); }
 .field { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; }
 .btn { background: var(--accent); color: white; border-radius: 4px; padding: 5px 12px; font-weight: 500; }
-table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
-table.grid th, table.grid td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; }
-table.grid td.num, table.grid th.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.datagrid { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.datagrid th, table.datagrid td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; }
+table.datagrid td.num, table.datagrid th.num { text-align: right; font-variant-numeric: tabular-nums; }

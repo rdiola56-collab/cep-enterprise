@@ -19,6 +19,7 @@ services:
     build: ./backend
     environment:
       CEP_DATABASE_URL: postgresql+psycopg://cep:cep@db:5432/cep
+      CEP_SECRET_KEY: ${CEP_SECRET_KEY:?set CEP_SECRET_KEY to a long random value}
     ports: ["8000:8000"]
     depends_on:
       db: { condition: service_healthy }

@@ -4,7 +4,8 @@ Construction Estimating Program for high-rise and commercial buildings: one
 application, one PostgreSQL database, **one Universal Estimating Engine**
 shared by all 19 estimating modules.
 
-This first phase delivers the engine and its foundations. See
+Phases 1–2 deliver the engine and its foundations; phase 3 connects all 19
+modules and adds sign-in with role permissions. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and for what is
 not built yet.
 
@@ -20,7 +21,16 @@ not built yet.
   append-only rates and immutable approved estimates enforced by the database.
 - Estimates: calculate items, BOQ consolidation, cost/material/labor/equipment
   summaries, approval, revisions and revision comparison.
-- REST API and a Next.js shell (module list, formula library, unit converter).
+- All 19 modules: 16 estimating modules (39 item types on 13 shared formulas),
+  plus the price book, labor/productivity library and detailed-estimate workspaces.
+- Provisional sums priced from dated price-book records, still through rate analysis.
+- Sign-in (scrypt passwords, signed tokens) and roles: global (admin, cost
+  engineer, estimator, viewer) and per project (manager, estimator, approver, viewer).
+  Users outside a project get "not found" for everything in it.
+- Project WBS (buildings, floors incl. basements, zones, rooms); master-estimate
+  consolidation by module, trade, building, floor, zone, room and basement; cost per m².
+- REST API and a Next.js app: sign-in, projects, estimates (items, BOQ, consolidation,
+  approval), formula library, unit converter and module pages.
 
 ## Acceptance tests (spec §12)
 
@@ -52,7 +62,14 @@ docker compose up --build
 ```
 
 The backend container runs migrations and seeds the reference formulas. No
-prices or rates are seeded: enter them through the API (`/api/library/*`).
+prices, rates or assemblies are seeded: enter them through the API (`/api/library/*`).
+Set `CEP_SECRET_KEY` to a long random value before real use.
+
+Create the first administrator:
+
+```bash
+docker compose exec backend python -m app.services.users create-admin you@example.com "Your Name"
+```
 
 ### Local development (Windows, macOS, Linux)
 
@@ -67,6 +84,8 @@ pip install -e ".[dev]"
 set CEP_DATABASE_URL=postgresql+psycopg://cep:cep@localhost:5432/cep   # export on macOS/Linux
 alembic upgrade head
 python -m app.services.seed
+python -m app.services.users create-admin you@example.com "Your Name"
+set CEP_SECRET_KEY=<long random string>   # export on macOS/Linux
 uvicorn app.main:app --reload
 
 # frontend (second terminal)

@@ -1,13 +1,13 @@
 const layers = [
-  ["Presentation", "Next.js workspaces (this shell)"],
-  ["Project management", "Projects, buildings, floors, zones, rooms"],
-  ["Estimating modules", "19 module definitions: configuration only, no calculation code"],
+  ["Presentation", "Next.js: sign-in, projects, estimate views, formula library, module pages"],
+  ["Project management", "Projects, members and roles, buildings, floors, zones, rooms"],
+  ["Estimating modules", "All 19 configured (16 estimating, 2 library, 1 reporting); configuration only, no calculation code"],
   ["Universal quantity calculation", "Unit-aware formula engine with versioned formulas"],
   ["Construction assembly", "Assembly library, project-specific revisions"],
   ["Cost calculation", "Material, labor, equipment and rate analysis"],
   ["Database and data access", "PostgreSQL, append-only rates, frozen approved estimates"],
   ["Drawing and BIM integration", "Not built yet (phase 5); schema references only"],
-  ["Reporting and export", "BOQ and cost summaries via API; Excel/PDF export not built yet"],
+  ["Reporting and export", "BOQ, consolidation and cost per m²; Excel/PDF export not built yet"],
 ];
 
 export default function Overview() {
@@ -21,7 +21,7 @@ export default function Overview() {
         </p>
       </div>
       <section className="panel">
-        <table className="grid">
+        <table className="datagrid">
           <thead>
             <tr><th>Layer</th><th>Status in this build</th></tr>
           </thead>

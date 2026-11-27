@@ -8,9 +8,9 @@ network calls. There are no microservices at this stage.
 
 | # | Layer | Code | Status |
 |---|-------|------|--------|
-| 1 | Presentation | `frontend/` (Next.js shell), `backend/app/api/` (HTTP boundary) | Shell built: sidebar, formula library, unit converter, module pages |
-| 2 | Project management | `db/models.py` (projects, buildings, floors, zones, rooms), `services/estimates.py` | Schema and services built; no UI yet |
-| 3 | Estimating modules | `app/modules/registry.py` | 19 modules registered; 5 configured, 14 "planned" |
+| 1 | Presentation | `frontend/`, `backend/app/api/` (HTTP boundary, permissions) | Sign-in, projects, estimate views (items, BOQ, consolidation, approve), formula library, module pages |
+| 2 | Project management | `services/projects.py`, `services/users.py`, `auth/` | Projects, members and roles, WBS; WBS has API only, no editing screen |
+| 3 | Estimating modules | `app/modules/registry.py` | All 19 configured: 16 estimating (39 item types), 2 library, 1 reporting |
 | 4 | Universal quantity calculation | `app/engine/units.py`, `app/engine/formula/` | Built and tested |
 | 5 | Construction assembly | `app/engine/assembly.py`, `services/library.py` | Built and tested |
 | 6 | Cost calculation | `app/engine/costing.py`, `app/engine/rates.py` | Built and tested |
@@ -95,12 +95,37 @@ Each estimate item has a stable `item_key`, unique per version. Recalculating
 replaces the item, so the BOQ and summaries can never double-count it.
 Consolidation is available by module, trade, assembly, building, floor, zone and room.
 
+## Access control
+
+- Passwords are hashed with scrypt; access tokens are HS256-signed with
+  `CEP_SECRET_KEY` and expire (default 8 h). "Sign out everywhere" bumps a
+  per-user token version.
+- Global roles: admin (everything), cost_engineer (master library, create
+  projects), estimator (create projects), viewer. Project roles: manager,
+  estimator, approver, viewer. Matrix in `app/auth/permissions.py`.
+- A user who is not a member of a project gets 404 for it, so project ids
+  cannot be probed. The project creator becomes its manager.
+- Project managers maintain their project's own prices, rates, assemblies and
+  formulas; only admins and cost engineers change the master library.
+
+## Modules
+
+Modules 1–16 each declare item types → shared formula → default assembly (or
+direct pricing for provisional sums). 39 item types share 13 formulas, e.g.
+COUNT serves doors, plate counts, plumbing rough-ins, boxes, sprinkler heads,
+FDAS devices and wheel stoppers. Modules 17–19 are workspaces over the
+library and estimate services and take no items themselves.
+
+Default assemblies are referenced by code but not seeded: the master library or
+the project must define them. `GET /api/modules?project_id=` reports which are
+missing for a project, and pricing an item with a missing assembly fails with a
+clear error instead of a made-up figure.
+
 ## Not built yet (and not presented as working)
 
-- Authentication and role permissions (phase 1 remainder). The API records the
-  `X-CEP-User` header in audit logs only.
-- 14 of the 19 modules are registered as "planned".
 - Bluebeam, PDF takeoff, DWG/DXF, IFC and Revit: no adapters or import pipeline
   yet. Only the reference tables exist.
 - Excel/PDF export, Celery jobs (Redis is in docker-compose for that later).
-- Estimate workspace UI (editable grids, WBS tree, assembly/material editors).
+- Editing screens: Excel-like item grid, WBS tree, assembly/material/labor
+  library editors. These exist as API endpoints only.
+- Single sign-on, password reset, account lockout after failed attempts.

@@ -24,9 +24,10 @@ export default function ModulePage({ params }: { params: Promise<{ code: string 
         <h1 className="text-xl font-semibold">{mod.number}. {mod.name}</h1>
         <p className="muted text-sm">Trade: {mod.trade}</p>
       </div>
-      {mod.status === "planned" ? (
+      {mod.kind !== "estimating" ? (
         <div className="panel p-4 text-sm">
-          This module is registered but not configured yet. It will be connected to the shared engine in phase 3.
+          This is a {mod.kind} workspace over the shared services ({mod.services.join(", ")}).
+          {mod.kind === "reporting" ? " Open an estimate under Projects to see the BOQ and consolidations." : " Records are maintained through the library API; the editing screen is not built yet."}
         </div>
       ) : (
         mod.item_types.map((it) => {
@@ -36,12 +37,13 @@ export default function ModulePage({ params }: { params: Promise<{ code: string 
               <div className="mb-2 flex items-baseline justify-between">
                 <span className="font-semibold">{it.label}</span>
                 <span className="muted text-xs">
-                  {it.classification} · formula {it.formula} · assembly {it.default_assembly}
+                  {it.classification} · formula {it.formula} ·{" "}
+                  {it.priced_directly ? "priced from a price-book item" : `assembly ${it.default_assembly}`}
                 </span>
               </div>
               {f ? <FormulaRunner formula={f} /> : <div className="muted text-sm">Formula not loaded.</div>}
               <p className="muted mt-2 text-xs">
-                Pricing an item needs a project with rates; use the estimate API until the estimate workspace is built.
+                Pricing an item needs a project with its assembly and rates in the library.
               </p>
             </section>
           );
