@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --ink: #16191f;
+  --muted: #5b6472;
+  --line: #e2e5ea;
+  --accent: #1f5fbf;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101317;
+    --panel: #171b21;
+    --ink: #e8ebf0;
+    --muted: #9aa3b0;
+    --line: #2a3039;
+    --accent: #6ea2f5;
+  }
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.muted { color: var(--muted); }
+.field { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; }
+.btn { background: var(--accent); color: white; border-radius: 4px; padding: 5px 12px; font-weight: 500; }
+table.datagrid { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.datagrid th, table.datagrid td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; }
+table.datagrid td.num, table.datagrid th.num { text-align: right; font-variant-numeric: tabular-nums; }
