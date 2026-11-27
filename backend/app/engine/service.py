@@ -15,7 +15,7 @@ from decimal import Decimal
 from typing import Callable, Mapping
 
 from ..modules.registry import ModuleDefinition, get_module
-from .assembly import Assembly
+from .assembly import Assembly, MaterialComponent
 from .costing import calculate_item
 from .estimate import EstimateItem
 from .formula.evaluator import FormulaDefinition, FormulaEvaluationError, RawInput, evaluate
@@ -52,10 +52,11 @@ class EstimatingEngine:
         assembly_code: str | None = None,
         formula_version: int | None = None,
         target_days: Decimal | None = None,
+        priced_item_code: str | None = None,
     ) -> EstimateItem:
         mod = get_module(module) if isinstance(module, str) else module
-        if mod.status != "configured":
-            raise ValidationFailed([f"module '{mod.name}' is not configured yet"])
+        if mod.kind != "estimating" or mod.status != "configured":
+            raise ValidationFailed([f"module '{mod.name}' does not take estimate items"])
         it = mod.item_type(item_type)
         formula = self.formulas(it.formula_code, formula_version)
         try:
@@ -78,7 +79,16 @@ class EstimatingEngine:
         if errors:
             raise ValidationFailed(errors)
 
-        assembly = self.assemblies(assembly_code or it.default_assembly)
+        if it.priced_directly:
+            if not priced_item_code:
+                raise ValidationFailed([f"{it.label} needs a price-book item (priced_item_code)"])
+            if assembly_code:
+                raise ValidationFailed([f"{it.label} is priced directly, not through an assembly"])
+            assembly = direct_price_assembly(priced_item_code, result.unit, mod.trade, it.label)
+        else:
+            if priced_item_code:
+                raise ValidationFailed([f"{it.label} is priced through an assembly, not directly"])
+            assembly = self.assemblies(assembly_code or it.default_assembly)
         work_qty = Quantity.of(result.value, result.unit)
         breakdown = calculate_item(assembly, work_qty, self.rates, as_of, condition, target_days)
         return EstimateItem(
@@ -87,7 +97,23 @@ class EstimatingEngine:
             trade=mod.trade,
             description=description or it.label,
             assembly_code=assembly.code,
+            priced_item_code=priced_item_code,
             breakdown=breakdown,
             location=dict(location or {}),
             quantity_source=result,
         )
+
+
+DIRECT_PREFIX = "PRICED:"
+
+
+def direct_price_assembly(item_code: str, unit: str, trade: str, label: str) -> Assembly:
+    """One-line assembly for items priced straight from the price book (e.g. provisional sums).
+    The amount still comes from a dated, versioned price record and still passes through rate analysis."""
+    return Assembly(
+        code=f"{DIRECT_PREFIX}{item_code}",
+        description=label,
+        trade=trade,
+        unit=unit,
+        materials=(MaterialComponent(item_code, label, Decimal(1), unit, category="other"),),
+    ).validate()

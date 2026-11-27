@@ -45,12 +45,12 @@ def test_at1_one_formula_shared_across_modules():
     assert a.amount != b.amount
 
 
-def test_modules_carry_no_calculation_code_and_unconfigured_modules_are_not_operational():
+def test_all_19_modules_are_configured_and_workspaces_take_no_items():
     assert len(MODULES) == 19
-    configured = {m.code for m in MODULES.values() if m.status == "configured"}
-    assert configured == {"reinforced_concrete", "structural_steel", "walls_partitions", "ceiling", "tiling"}
-    with pytest.raises(ValidationFailed, match="not configured"):
-        engine().calculate_item(item_id="x", module="painting", item_type="any", inputs={}, as_of=AS_OF)
+    assert all(m.status == "configured" for m in MODULES.values())
+    assert {m.number for m in MODULES.values() if m.kind != "estimating"} == {17, 18, 19}
+    with pytest.raises(ValidationFailed, match="does not take estimate items"):
+        engine().calculate_item(item_id="x", module="materials_pricelist", item_type="any", inputs={}, as_of=AS_OF)
 
 
 def test_module_validation_rules():

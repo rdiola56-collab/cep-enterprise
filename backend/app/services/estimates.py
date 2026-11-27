@@ -73,6 +73,7 @@ def calculate_item(
     bim_element_id=None,
     actor: str = "system",
     project_id: uuid.UUID | None = None,
+    priced_item_code: str | None = None,
 ) -> m.EstimateItemRecord:
     """Calculate (or recalculate) one estimate item. Same item_key → same row, never a duplicate."""
     v = _version(s, version_id, project_id)
@@ -85,11 +86,12 @@ def calculate_item(
     result = engine.calculate_item(
         item_id=item_key, module=module, item_type=item_type, inputs=_raw_inputs(inputs), as_of=v.pricing_date,
         description=description, condition=condition, assembly_code=assembly_code,
+        priced_item_code=priced_item_code,
     )
     b = result.breakdown
     fs = result.quantity_source
     formula_version_id = formulas.used[(fs.formula_code, fs.formula_version)]
-    assembly_revision_id = assemblies.used[result.assembly_code]
+    assembly_revision_id = None if priced_item_code else assemblies.used[result.assembly_code]
     places = engine.rates.parameters().money_places
 
     item = s.scalars(
@@ -108,6 +110,7 @@ def calculate_item(
     item.description = result.description
     item.building_id, item.floor_id, item.zone_id, item.room_id = building_id, floor_id, zone_id, room_id
     item.assembly_revision_id, item.formula_version_id = assembly_revision_id, formula_version_id
+    item.priced_item_code = priced_item_code
     item.condition, item.inputs = condition, inputs
     item.quantity, item.unit = b.quantity, b.unit
     item.amount, item.unit_rate = b.total_amount, b.unit_rate
@@ -164,27 +167,80 @@ def items(s: Session, version_id: uuid.UUID) -> list[m.EstimateItemRecord]:
 
 
 def boq(s: Session, version_id: uuid.UUID) -> list[dict]:
+    """BOQ lines: items grouped by trade + work item (assembly, or price-book item for direct-priced lines) + unit."""
+    code = func.coalesce(m.AssemblyRecord.code, func.concat("PRICED:", m.EstimateItemRecord.priced_item_code))
+    desc = func.coalesce(m.AssemblyRecord.description, func.min(m.EstimateItemRecord.description))
     rows = s.execute(
         select(
             m.EstimateItemRecord.trade,
-            m.AssemblyRecord.code,
-            m.AssemblyRecord.description,
+            code.label("code"),
+            desc,
             m.EstimateItemRecord.unit,
             func.sum(m.EstimateItemRecord.quantity),
             func.sum(m.EstimateItemRecord.amount),
             func.array_agg(m.EstimateItemRecord.item_key),
         )
-        .join(m.AssemblyRevision, m.AssemblyRevision.id == m.EstimateItemRecord.assembly_revision_id)
-        .join(m.AssemblyRecord, m.AssemblyRecord.id == m.AssemblyRevision.assembly_id)
+        .outerjoin(m.AssemblyRevision, m.AssemblyRevision.id == m.EstimateItemRecord.assembly_revision_id)
+        .outerjoin(m.AssemblyRecord, m.AssemblyRecord.id == m.AssemblyRevision.assembly_id)
         .where(m.EstimateItemRecord.estimate_version_id == version_id)
-        .group_by(m.EstimateItemRecord.trade, m.AssemblyRecord.code, m.AssemblyRecord.description, m.EstimateItemRecord.unit)
-        .order_by(m.EstimateItemRecord.trade, m.AssemblyRecord.code)
+        .group_by(m.EstimateItemRecord.trade, code, m.AssemblyRecord.description, m.EstimateItemRecord.unit)
+        .order_by(m.EstimateItemRecord.trade, code)
     ).all()
     return [
         {"line_no": n, "trade": t, "assembly_code": c, "description": d, "unit": u, "quantity": q, "amount": a,
          "unit_rate": (a / q) if q else Decimal(0), "source_item_keys": sorted(keys)}
         for n, (t, c, d, u, q, a, keys) in enumerate(rows, start=1)
     ]
+
+
+CONSOLIDATION_DIMENSIONS = ("module", "trade", "building", "floor", "zone", "room", "basement")
+
+
+def consolidate(s: Session, version_id: uuid.UUID, by: tuple[str, ...]) -> list[dict]:
+    """Master-estimate consolidation by any combination of module, trade and location levels.
+    Items without a location are grouped under an empty code."""
+    for d in by:
+        if d not in CONSOLIDATION_DIMENSIONS:
+            raise ValueError(f"unknown consolidation dimension '{d}'")
+    its = items(s, version_id)
+    names: dict[uuid.UUID, tuple[str, bool]] = {}
+    for model, key in ((m.Building, "building"), (m.Floor, "floor"), (m.Zone, "zone"), (m.Room, "room")):
+        ids = {getattr(i, f"{key}_id") for i in its} - {None}
+        for row in s.scalars(select(model).where(model.id.in_(ids))) if ids else []:
+            names[row.id] = (row.code, getattr(row, "is_basement", False))
+
+    def dim(i: m.EstimateItemRecord, d: str) -> str:
+        if d in ("module", "trade"):
+            return getattr(i, d)
+        if d == "basement":
+            return "basement" if i.floor_id and names[i.floor_id][1] else "above grade"
+        ref = getattr(i, f"{d}_id")
+        return names[ref][0] if ref else ""
+
+    groups: dict[tuple, dict] = {}
+    for i in its:
+        key = tuple(dim(i, d) for d in by)
+        g = groups.setdefault(key, {**dict(zip(by, key)), "items": 0, "amount": Decimal(0), "direct": Decimal(0)})
+        g["items"] += 1
+        g["amount"] += Decimal(i.breakdown["totals"]["total"])
+        g["direct"] += Decimal(i.breakdown["totals"]["direct"])
+    return [groups[k] for k in sorted(groups)]
+
+
+def cost_per_area(s: Session, version_id: uuid.UUID) -> dict:
+    """Cost per m² of gross floor area, overall and per floor (floors without a GFA are listed but not divided)."""
+    v = _version(s, version_id)
+    floors = list(s.scalars(select(m.Floor).where(m.Floor.project_id == v.project_id)))
+    by_floor = {r["floor"]: r["amount"] for r in consolidate(s, version_id, ("floor",))}
+    total = sum(by_floor.values(), Decimal(0))
+    gfa = sum((f.gross_floor_area_m2 for f in floors if f.gross_floor_area_m2), Decimal(0))
+    rows = []
+    for f in sorted(floors, key=lambda f: f.level):
+        amt = by_floor.get(f.code, Decimal(0))
+        rows.append({"floor": f.code, "level": f.level, "gross_floor_area_m2": f.gross_floor_area_m2, "amount": amt,
+                     "cost_per_m2": (amt / f.gross_floor_area_m2) if f.gross_floor_area_m2 else None})
+    return {"total": total, "gross_floor_area_m2": gfa, "cost_per_m2": (total / gfa) if gfa else None,
+            "unallocated_amount": by_floor.get("", Decimal(0)), "floors": rows}
 
 
 def cost_summary(s: Session, version_id: uuid.UUID) -> dict:
@@ -244,11 +300,13 @@ def new_revision(s: Session, version_id: uuid.UUID, pricing_date: date | None = 
     s.add(v)
     s.flush()
     for it in items(s, src.id):
-        asm = s.get(m.AssemblyRevision, it.assembly_revision_id)
-        rec = s.get(m.AssemblyRecord, asm.assembly_id)
+        rec = None
+        if it.assembly_revision_id:
+            rec = s.get(m.AssemblyRecord, s.get(m.AssemblyRevision, it.assembly_revision_id).assembly_id)
         takeoff = s.scalars(select(m.QuantityTakeoff).where(m.QuantityTakeoff.estimate_item_id == it.id)).first()
         calculate_item(s, v.id, item_key=it.item_key, module=it.module, item_type=it.item_type, inputs=it.inputs,
-                       description=it.description, condition=it.condition, assembly_code=rec.code,
+                       description=it.description, condition=it.condition, assembly_code=rec.code if rec else None,
+                       priced_item_code=it.priced_item_code,
                        building_id=it.building_id, floor_id=it.floor_id, zone_id=it.zone_id, room_id=it.room_id,
                        source=takeoff.source if takeoff else "manual",
                        drawing_reference_id=takeoff.drawing_reference_id if takeoff else None,

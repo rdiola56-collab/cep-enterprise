@@ -26,6 +26,7 @@ class EstimateItem:
     breakdown: CostBreakdown
     location: Mapping[str, str] = field(default_factory=dict)  # building/floor/zone/room
     quantity_source: FormulaResult | None = None
+    priced_item_code: str | None = None
 
     @property
     def quantity(self) -> Decimal:

@@ -416,7 +416,8 @@ class EstimateItemRecord(Base):
     floor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     zone_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     room_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    assembly_revision_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("assembly_revisions.id"))
+    assembly_revision_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("assembly_revisions.id"))
+    priced_item_code: Mapped[str | None] = mapped_column(String(60))  # direct-priced items (provisional sums)
     formula_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("formula_versions.id"))
     condition: Mapped[str] = mapped_column(String(30))
     inputs: Mapped[dict] = mapped_column(JSONB)  # raw measured inputs as entered
@@ -433,6 +434,7 @@ class EstimateItemRecord(Base):
         ForeignKeyConstraint(["zone_id", "project_id"], ["zones.id", "zones.project_id"]),
         ForeignKeyConstraint(["room_id", "project_id"], ["rooms.id", "rooms.project_id"]),
         UniqueConstraint("estimate_version_id", "item_key", name="uq_item_key_per_version"),
+        CheckConstraint("(assembly_revision_id IS NULL) <> (priced_item_code IS NULL)", name="ck_item_priced_by_one_source"),
         UniqueConstraint("id", "project_id"),
         Index("ix_items_version_trade", "estimate_version_id", "trade"),
     )
@@ -505,6 +507,38 @@ class BoqItem(Base):
     __table_args__ = (
         ForeignKeyConstraint(["estimate_version_id", "project_id"], ["estimate_versions.id", "estimate_versions.project_id"]),
         UniqueConstraint("estimate_version_id", "line_no"),
+    )
+
+
+# ---------------------------------------------------------------- users and access
+
+
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[uuid.UUID] = pk()
+    email: Mapped[str] = mapped_column(String(254), unique=True)
+    name: Mapped[str] = mapped_column(String(200))
+    password_hash: Mapped[str] = mapped_column(String(200))
+    global_role: Mapped[str] = mapped_column(String(20), default="viewer")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    token_version: Mapped[int] = mapped_column(Integer, default=1)  # bump to revoke all tokens
+    created_at: Mapped[datetime] = created()
+    __table_args__ = (
+        CheckConstraint("global_role in ('admin','cost_engineer','estimator','viewer')", name="ck_user_global_role"),
+        CheckConstraint("email = lower(email)", name="ck_user_email_lower"),
+    )
+
+
+class ProjectMember(Base):
+    __tablename__ = "project_members"
+    id: Mapped[uuid.UUID] = pk()
+    project_id: Mapped[uuid.UUID] = project_fk(False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = created()
+    __table_args__ = (
+        UniqueConstraint("project_id", "user_id"),
+        CheckConstraint("role in ('manager','estimator','approver','viewer')", name="ck_member_role"),
     )
 
 
