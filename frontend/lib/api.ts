@@ -64,7 +64,8 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
-  if (res.status === 401 && !path.startsWith("/auth/login")) {
+  const publicCall = ["/auth/login", "/auth/reset", "/auth/sso"].some((p) => path.startsWith(p));
+  if (res.status === 401 && !publicCall) {
     setToken(null);
     if (typeof window !== "undefined" && window.location.pathname !== "/login") window.location.href = "/login";
   }
@@ -106,7 +107,8 @@ export async function download(path: string, fallbackName: string) {
 }
 
 export type WbsFloor = { id: string; code: string; name: string; level: number; is_basement: boolean;
-  rooms: { id: string; code: string; name: string }[]; zones: { id: string; code: string; name: string }[] };
+  gross_floor_area_m2: string | null;
+  rooms: { id: string; code: string; name: string; zone_id: string | null }[]; zones: { id: string; code: string; name: string }[] };
 export type WbsBuilding = { id: string; code: string; name: string; floors: WbsFloor[] };
 
 /** multipart upload (the browser sets the boundary, so no JSON content type) */
@@ -120,4 +122,22 @@ export async function upload<T>(path: string, form: FormData): Promise<T> {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(typeof body.detail === "string" ? body.detail : `Upload failed (${res.status})`, res.status);
   return body as T;
+}
+
+export const PUBLIC_PAGES = ["/login", "/login/sso", "/reset-password"];
+
+export type Job = { id: string; kind: string; status: "queued" | "running" | "succeeded" | "failed"; error: string | null;
+  result: Record<string, unknown> | null; output_name: string | null; mode: string };
+
+/** Poll a background job until it finishes (the worker writes its status to the database). */
+export async function waitForJob(pid: string, job: Job, onUpdate?: (j: Job) => void): Promise<Job> {
+  let current = job;
+  let delay = 500;
+  while (current.status === "queued" || current.status === "running") {
+    await new Promise((r) => setTimeout(r, delay));
+    delay = Math.min(delay * 1.5, 4000);
+    current = await api<Job>(`/projects/${pid}/jobs/${current.id}`);
+    onUpdate?.(current);
+  }
+  return current;
 }

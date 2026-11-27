@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from .. import jobs
 from ..auth.permissions import Perm
+from ..db import models as m
 from ..integrations import ADAPTER_INFO, SourceError
 from ..services import imports as imp
 from .deps import DB, CurrentUser, project_access
@@ -76,13 +79,19 @@ async def stage_import(project_id: uuid.UUID, version_id: uuid.UUID, user: Curre
                        file: UploadFile = File(...), adapter: str = Form(...), source_name: str = Form(...),
                        source_revision: str = Form(...), level: str | None = Form(None),
                        drawing_unit: str | None = Form(None), default_unit: str | None = Form(None),
-                       building_id: uuid.UUID | None = Form(None)):
+                       building_id: uuid.UUID | None = Form(None), background: bool = Form(False)):
     project_access(s, user, project_id, Perm.EDIT_ESTIMATE)
     _version(s, project_id, version_id)
     content = await file.read(MAX_UPLOAD + 1)
     if len(content) > MAX_UPLOAD:
         raise HTTPException(413, "file is larger than 200 MB")
     options = {k: v for k, v in {"level": level, "drawing_unit": drawing_unit, "default_unit": default_unit}.items() if v}
+    if background:
+        job = jobs.create(s, project_id, "import_stage", {
+            "version_id": str(version_id), "adapter": adapter, "file_name": file.filename or "upload",
+            "source_name": source_name, "source_revision": source_revision, "options": options,
+            "building_id": str(building_id) if building_id else None}, user.email, payload=content)
+        return JSONResponse(jsonable(jobs.job_dict(jobs.dispatch(s, job))), status_code=202)
     try:
         b = _guard_import(imp.stage, s, version_id, adapter=adapter, file_name=file.filename or "upload", content=content,
                           source_name=source_name, source_revision=source_revision, options=options,
@@ -148,3 +157,49 @@ def discard(project_id: uuid.UUID, batch_id: uuid.UUID, user: CurrentUser, s: DB
     project_access(s, user, project_id, Perm.EDIT_ESTIMATE)
     b = _guard(imp.get_batch, s, project_id, batch_id)
     _guard_import(imp.discard, s, b.id, user.email)
+
+
+# ---------------------------------------------------------------- background jobs
+
+
+class ExportJobIn(BaseModel):
+    format: str = Field(pattern="^(xlsx|pdf)$")
+
+
+@router.post("/projects/{project_id}/versions/{version_id}/export-jobs", status_code=202)
+def export_job(project_id: uuid.UUID, version_id: uuid.UUID, body: ExportJobIn, user: CurrentUser, s: DB):
+    project_access(s, user, project_id)
+    _version(s, project_id, version_id)
+    job = jobs.create(s, project_id, "export", {"version_id": str(version_id), "format": body.format}, user.email)
+    return jsonable(jobs.job_dict(jobs.dispatch(s, job)))
+
+
+def _job(s, project_id: uuid.UUID, job_id: uuid.UUID) -> m.Job:
+    job = s.get(m.Job, job_id)
+    if job is None or job.project_id != project_id:
+        raise HTTPException(404, "job not found")
+    return job
+
+
+@router.get("/projects/{project_id}/jobs/{job_id}")
+def get_job(project_id: uuid.UUID, job_id: uuid.UUID, user: CurrentUser, s: DB):
+    project_access(s, user, project_id)
+    return jsonable(jobs.job_dict(_job(s, project_id, job_id)))
+
+
+@router.get("/projects/{project_id}/jobs")
+def list_jobs(project_id: uuid.UUID, user: CurrentUser, s: DB, limit: int = 20):
+    project_access(s, user, project_id)
+    from sqlalchemy import select
+    q = select(m.Job).where(m.Job.project_id == project_id).order_by(m.Job.created_at.desc()).limit(min(limit, 100))
+    return jsonable([jobs.job_dict(j) for j in s.scalars(q)])
+
+
+@router.get("/projects/{project_id}/jobs/{job_id}/download")
+def download_job(project_id: uuid.UUID, job_id: uuid.UUID, user: CurrentUser, s: DB):
+    project_access(s, user, project_id)
+    job = _job(s, project_id, job_id)
+    if job.status != "succeeded" or job.output is None:
+        raise HTTPException(409, f"job is {job.status}; nothing to download")
+    return Response(job.output, media_type=job.output_type,
+                    headers={"Content-Disposition": f'attachment; filename="{job.output_name}"'})

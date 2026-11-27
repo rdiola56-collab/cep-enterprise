@@ -1,4 +1,4 @@
-# Local stack: PostgreSQL, Redis (reserved for Celery background jobs in a later phase), API, web.
+# Local stack: PostgreSQL, Redis (job queue), API, background worker, web.
 services:
   db:
     image: postgres:16
@@ -20,9 +20,26 @@ services:
     environment:
       CEP_DATABASE_URL: postgresql+psycopg://cep:cep@db:5432/cep
       CEP_SECRET_KEY: ${CEP_SECRET_KEY:?set CEP_SECRET_KEY to a long random value}
+      CEP_REDIS_URL: redis://redis:6379/0
+      # Single sign-on (optional): set all three to switch it on. See docs/ARCHITECTURE.md.
+      CEP_OIDC_ISSUER: ${CEP_OIDC_ISSUER:-}
+      CEP_OIDC_CLIENT_ID: ${CEP_OIDC_CLIENT_ID:-}
+      CEP_OIDC_CLIENT_SECRET: ${CEP_OIDC_CLIENT_SECRET:-}
+      CEP_OIDC_REDIRECT_URI: ${CEP_OIDC_REDIRECT_URI:-}
     ports: ["8000:8000"]
     depends_on:
       db: { condition: service_healthy }
+      redis: { condition: service_started }
+  worker:
+    build: ./backend
+    command: celery -A app.jobs worker --loglevel=info --concurrency=2
+    environment:
+      CEP_DATABASE_URL: postgresql+psycopg://cep:cep@db:5432/cep
+      CEP_SECRET_KEY: ${CEP_SECRET_KEY:?set CEP_SECRET_KEY to a long random value}
+      CEP_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
   frontend:
     build:
       context: ./frontend

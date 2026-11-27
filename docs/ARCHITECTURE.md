@@ -9,7 +9,7 @@ network calls. There are no microservices at this stage.
 | # | Layer | Code | Status |
 |---|-------|------|--------|
 | 1 | Presentation | `frontend/`, `backend/app/api/` (HTTP boundary, permissions) | Sign-in, projects, estimate editor (items, bulk entry, BOQ, consolidation, approve, export), library editors, formula library, module pages |
-| 2 | Project management | `services/projects.py`, `services/users.py`, `auth/` | Projects, members and roles, WBS; WBS has API only, no editing screen |
+| 2 | Project management | `services/projects.py`, `services/users.py`, `auth/` | Projects, members and roles, WBS with editing screen, accounts, SSO |
 | 3 | Estimating modules | `app/modules/registry.py` | All 19 configured: 16 estimating (39 item types), 2 library, 1 reporting |
 | 4 | Universal quantity calculation | `app/engine/units.py`, `app/engine/formula/` | Built and tested |
 | 5 | Construction assembly | `app/engine/assembly.py`, `services/library.py` | Built and tested |
@@ -153,6 +153,43 @@ Consolidation is available by module, trade, assembly, building, floor, zone and
 - Project managers maintain their project's own prices, rates, assemblies and
   formulas; only admins and cost engineers change the master library.
 
+## Accounts, sign-in and single sign-on
+
+- **Lockout**: 5 wrong passwords in a row lock an account for 15 minutes, even for the
+  right password. The limits are set by `CEP_MAX_FAILED_LOGINS` and `CEP_LOCKOUT_MINUTES`.
+  Administrators can unlock an account.
+- **Password reset**: an administrator issues a one-time reset link, valid for 24 hours
+  (`CEP_RESET_LINK_HOURS`). Only a SHA-256 hash of the token is stored. Using the link
+  sets the password, unlocks the account and signs out every session. CEP sends no
+  email, so the administrator passes the link on.
+- **Password change**: changing your own password signs out every other session.
+- **Single sign-on** (`app/auth/sso.py`) uses the OpenID Connect authorization code flow
+  with PKCE, plus state and nonce stored server-side for 10 minutes.
+  - The ID token is verified against the provider's JWKS: signature, issuer, audience,
+    expiry and nonce.
+  - The first sign-in links an existing account by verified email. Later sign-ins match
+    the provider's issuer and subject.
+  - Unknown people are refused, unless `CEP_OIDC_AUTO_CREATE` names a role to create
+    them with.
+  - SSO never grants project access: project roles still come from CEP.
+  - Configure it with `CEP_OIDC_ISSUER`, `CEP_OIDC_CLIENT_ID`, `CEP_OIDC_CLIENT_SECRET`
+    and `CEP_OIDC_REDIRECT_URI` (`https://<web>/login/sso`).
+  - It is tested against a simulated provider, including forged signatures, wrong
+    audience, replayed state and wrong nonce. It has not been tried against a real
+    tenant yet.
+
+## Background jobs
+
+`app/jobs.py`: exports and large import staging run as jobs.
+
+- The API stores a `jobs` row and queues its id on Redis. A Celery worker
+  (`celery -A app.jobs worker`) runs it through the ordinary services, so a
+  background import is validated exactly like one made in the request.
+- The worker writes status, result or error and the output file back to PostgreSQL.
+- A job's work is all or nothing: a failure keeps only the error message.
+- Without `CEP_REDIS_URL`, the same jobs run inside the request (`CEP_JOBS_MODE=inline`).
+- The web app runs every export as a job, and every import larger than 5 MB.
+
 ## Modules
 
 Modules 1–16 each declare item types → shared formula → default assembly (or
@@ -171,6 +208,5 @@ clear error instead of a made-up figure.
 - Native DWG and Revit (.rvt) files, and measuring directly on PDF drawings.
   Save DWG as DXF, export IFC from Revit, and measure PDFs in Bluebeam and import
   the Markups Summary CSV. The importer lists these as "not built".
-- Celery jobs (Redis is in docker-compose for that later); exports run in the request.
-- WBS tree editing screen (buildings/floors/zones/rooms have API endpoints only).
-- Single sign-on, password reset, account lockout after failed attempts.
+- Outgoing email (reset links are handed over by an administrator).
+- SAML single sign-on (OpenID Connect only).

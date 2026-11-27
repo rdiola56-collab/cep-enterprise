@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { use, useEffect, useState } from "react";
-import { api, money } from "@/lib/api";
+import WbsEditor from "@/components/WbsEditor";
+import { api, money, type Me } from "@/lib/api";
 
 type Version = {
   estimate_id: string; code: string; name: string; version_id: string; version_no: number;
@@ -14,6 +15,10 @@ export default function ProjectPage({ params }: { params: Promise<{ pid: string 
   const [versions, setVersions] = useState<Version[] | null>(null);
   const [form, setForm] = useState({ code: "", name: "", pricing_date: new Date().toISOString().slice(0, 10) });
   const [error, setError] = useState<string | null>(null);
+  const [me, setMe] = useState<Me | null>(null);
+  useEffect(() => { api<Me>("/auth/me").then(setMe).catch(() => undefined); }, []);
+  const role = me?.projects[pid];
+  const canEdit = me?.global_role === "admin" || role === "manager" || role === "estimator";
 
   const load = () => api<Version[]>(`/projects/${pid}/estimates`).then(setVersions).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [pid]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -60,6 +65,7 @@ export default function ProjectPage({ params }: { params: Promise<{ pid: string 
         <button className="btn">New estimate</button>
         {error && <div className="w-full text-red-500">{error}</div>}
       </form>
+      <WbsEditor pid={pid} canEdit={canEdit} />
     </div>
   );
 }

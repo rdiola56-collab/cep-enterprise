@@ -6,7 +6,8 @@ shared by all 19 estimating modules.
 
 Phases 1–2 deliver the engine and its foundations; phase 3 connects all 19
 modules and adds sign-in with role permissions; phase 4 adds Excel/PDF export
-and the editing screens; phase 5 adds drawing and BIM quantity import. See
+and the editing screens; phase 5 adds drawing and BIM quantity import; phase 6
+adds WBS editing, account security, single sign-on and background jobs. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and for what is
 not built yet.
 
@@ -46,6 +47,16 @@ not built yet.
   manual entry. Rows are reviewed before import, re-importing a revised file updates
   the same items, and each item traces back to its markup or model element.
   Sample files are in `samples/`.
+- Building / floor / zone / room editor on the project page. Renaming never changes
+  an amount, and a node still used by estimate items or child nodes cannot be deleted.
+- Accounts: change password, administrator-issued one-time reset links (CEP sends no
+  email; the administrator passes the link on), lockout after 5 failed sign-ins,
+  deactivation, and a user admin page.
+- Single sign-on with any OpenID Connect provider (Entra ID, Google, Okta, Keycloak…),
+  off until configured. It has been tested against a simulated provider, not yet against
+  your own.
+- Background jobs (Celery + Redis) for exports and large imports. Without Redis, jobs run
+  inside the request instead.
 
 ## Acceptance tests (spec §12)
 
@@ -73,7 +84,7 @@ running total; total 62,584.43, unit rate 625.84 per m².
 
 ```bash
 docker compose up --build
-# API: http://localhost:8000/docs   Web: http://localhost:3000
+# API: http://localhost:8000/docs   Web: http://localhost:3000   (the worker service runs background jobs)
 ```
 
 The backend container runs migrations and seeds the reference formulas. No
@@ -102,6 +113,8 @@ python -m app.services.seed
 python -m app.services.users create-admin you@example.com "Your Name"
 set CEP_SECRET_KEY=<long random string>   # export on macOS/Linux
 uvicorn app.main:app --reload
+# optional, for background jobs (needs Redis): set CEP_REDIS_URL=redis://localhost:6379/0 for both, then
+celery -A app.jobs worker --pool=solo     # --pool=solo on Windows
 
 # frontend (second terminal)
 cd frontend

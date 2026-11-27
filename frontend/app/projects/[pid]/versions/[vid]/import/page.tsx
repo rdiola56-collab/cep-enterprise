@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { use, useEffect, useMemo, useState } from "react";
-import { api, money, qty, upload, type ModuleInfo, type WbsBuilding } from "@/lib/api";
+import { api, money, qty, upload, waitForJob, type Job, type ModuleInfo, type WbsBuilding } from "@/lib/api";
+
+const BACKGROUND_ABOVE = 5 * 1024 * 1024; // larger files are read by the background worker
 
 type Adapter = { label: string; extensions: string[]; status: string };
 type Rule = {
@@ -88,7 +90,14 @@ export default function ImportPage({ params }: { params: Promise<{ pid: string; 
       </p>
       {error && <div className="text-sm text-red-500">{error}</div>}
       <UploadForm adapters={adapters} wbs={wbs} busy={busy}
-        onUpload={(form) => run(async () => after(await upload<Batch>(`/projects/${pid}/versions/${vid}/imports`, form)))} />
+        onUpload={(form) => run(async () => {
+          const file = form.get("file") as File;
+          if (file.size <= BACKGROUND_ABOVE) return after(await upload<Batch>(`/projects/${pid}/versions/${vid}/imports`, form));
+          form.append("background", "true");
+          const job = await waitForJob(pid, await upload<Job>(`/projects/${pid}/versions/${vid}/imports`, form));
+          if (job.status !== "succeeded") throw new Error(job.error ?? "import failed");
+          after(await api<Batch>(`/projects/${pid}/imports/${(job.result as { batch_id: string }).batch_id}`));
+        })} />
       {open && (
         <BatchView batch={open} busy={busy} onClose={() => setOpen(null)}
           remap={() => run(async () => after(await api<Batch>(`/projects/${pid}/imports/${open.id}/remap`, { method: "POST" })))}

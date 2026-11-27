@@ -25,6 +25,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -524,11 +525,61 @@ class User(Base):
     global_role: Mapped[str] = mapped_column(String(20), default="viewer")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     token_version: Mapped[int] = mapped_column(Integer, default=1)  # bump to revoke all tokens
+    failed_logins: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sso_subject: Mapped[str | None] = mapped_column(String(300), unique=True)  # "<issuer>|<sub>" once linked
     created_at: Mapped[datetime] = created()
     __table_args__ = (
         CheckConstraint("global_role in ('admin','cost_engineer','estimator','viewer')", name="ck_user_global_role"),
         CheckConstraint("email = lower(email)", name="ck_user_email_lower"),
     )
+
+
+class PasswordReset(Base):
+    """One-time reset link issued by an administrator. Only a hash of the token is stored."""
+
+    __tablename__ = "password_resets"
+    id: Mapped[uuid.UUID] = pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str] = mapped_column(String(254))
+    created_at: Mapped[datetime] = created()
+
+
+class SsoLoginState(Base):
+    """Pending single-sign-on login: binds the browser's state to a nonce and PKCE verifier."""
+
+    __tablename__ = "sso_login_states"
+    id: Mapped[uuid.UUID] = pk()
+    state_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    nonce: Mapped[str] = mapped_column(String(100))
+    code_verifier: Mapped[str] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Job(Base):
+    """Background work (large imports, exports). The worker writes status and result; the API only reads."""
+
+    __tablename__ = "jobs"
+    id: Mapped[uuid.UUID] = pk()
+    project_id: Mapped[uuid.UUID] = project_fk(False)
+    kind: Mapped[str] = mapped_column(String(40))  # export | import_stage
+    status: Mapped[str] = mapped_column(String(20), default="queued")
+    params: Mapped[dict] = mapped_column(JSONB, default=dict)
+    payload: Mapped[bytes | None] = mapped_column(LargeBinary)  # uploaded file for import jobs
+    result: Mapped[dict | None] = mapped_column(JSONB)
+    output: Mapped[bytes | None] = mapped_column(LargeBinary)  # generated file for export jobs
+    output_name: Mapped[str | None] = mapped_column(String(255))
+    output_type: Mapped[str | None] = mapped_column(String(100))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(String(254))
+    created_at: Mapped[datetime] = created()
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (CheckConstraint("status in ('queued','running','succeeded','failed')", name="ck_job_status"),)
 
 
 class ProjectMember(Base):

@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..auth.permissions import GLOBAL_ROLES, PROJECT_ROLES, Perm
+from ..auth import sso
 from ..auth.security import issue_token
 from ..db import models as m
 from ..engine.assembly import Assembly, AssemblyError, EquipmentComponent, LaborComponent, MaterialComponent
@@ -86,13 +87,84 @@ class LoginIn(BaseModel):
     password: str
 
 
-@router.post("/auth/login")
-def login(body: LoginIn, s: DB):
-    user = user_svc.authenticate(s, body.email, body.password)
-    if user is None:
-        raise HTTPException(401, "email or password is incorrect")
+def _session_out(user: m.User) -> dict:
     return {"access_token": issue_token(str(user.id), user.token_version), "token_type": "bearer",
             "user": {"id": str(user.id), "email": user.email, "name": user.name, "global_role": user.global_role}}
+
+
+@router.post("/auth/login")
+def login(body: LoginIn, s: DB):
+    try:
+        user = user_svc.authenticate(s, body.email, body.password)
+    except user_svc.AccountLocked as exc:
+        raise HTTPException(429, str(exc)) from None
+    if user is None:
+        s.commit()  # keep the failed-attempt count even though the request fails
+        raise HTTPException(401, "email or password is incorrect")
+    return _session_out(user)
+
+
+@router.get("/auth/sso")
+def sso_info():
+    try:
+        cfg = sso.config()
+    except sso.SsoError as exc:
+        return {"enabled": False, "problem": str(exc)}
+    return {"enabled": cfg is not None, "label": cfg.label if cfg else None}
+
+
+@router.post("/auth/sso/start")
+def sso_start(s: DB):
+    cfg = sso.config()
+    if cfg is None:
+        raise HTTPException(404, "single sign-on is not configured")
+    try:
+        return {"authorization_url": sso.start(s, cfg)}
+    except Exception as exc:  # the provider is unreachable or misconfigured
+        raise HTTPException(502, f"identity provider not reachable: {exc}") from None
+
+
+class SsoCallbackIn(BaseModel):
+    code: str
+    state: str
+
+
+@router.post("/auth/sso/callback")
+def sso_callback(body: SsoCallbackIn, s: DB):
+    cfg = sso.config()
+    if cfg is None:
+        raise HTTPException(404, "single sign-on is not configured")
+    try:
+        user = sso.finish(s, cfg, body.code, body.state)
+    except sso.SsoError as exc:
+        s.commit()  # the attempt's state stays used
+        raise HTTPException(401, str(exc)) from None
+    return _session_out(user)
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.post("/auth/password")
+def change_password(body: PasswordChangeIn, user: CurrentUser, s: DB):
+    _guard(user_svc.change_password, s, user, body.current_password, body.new_password)
+    return _session_out(user)  # this session continues; every other session is signed out
+
+
+class ResetIn(BaseModel):
+    token: str
+    new_password: str
+
+
+@router.post("/auth/reset")
+def reset_password(body: ResetIn, s: DB):
+    try:
+        user = user_svc.reset_password(s, body.token, body.new_password)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return _session_out(user)
 
 
 @router.get("/auth/me")
@@ -125,8 +197,37 @@ def create_user(body: UserIn, user: CurrentUser, s: DB):
 @router.get("/users")
 def list_users(user: CurrentUser, s: DB):
     require_global(user, Perm.MANAGE_USERS)
-    return [{"id": str(u.id), "email": u.email, "name": u.name, "global_role": u.global_role, "is_active": u.is_active}
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    return [{"id": str(u.id), "email": u.email, "name": u.name, "global_role": u.global_role, "is_active": u.is_active,
+             "locked": bool(u.locked_until and u.locked_until > now), "sso_linked": u.sso_subject is not None}
             for u in s.scalars(select(m.User).order_by(m.User.email))]
+
+
+@router.post("/users/{user_id}/reset-link")
+def reset_link(user_id: uuid.UUID, user: CurrentUser, s: DB):
+    """Returns a one-time token once. CEP sends no email: the administrator passes the link on."""
+    require_global(user, Perm.MANAGE_USERS)
+    token, expires = _guard(user_svc.issue_reset_link, s, user_id, user.email)
+    return {"token": token, "path": f"/reset-password?token={token}", "expires_at": expires.isoformat()}
+
+
+@router.post("/users/{user_id}/unlock", status_code=204)
+def unlock_user(user_id: uuid.UUID, user: CurrentUser, s: DB):
+    require_global(user, Perm.MANAGE_USERS)
+    _guard(user_svc.unlock, s, user_id, user.email)
+
+
+class ActiveIn(BaseModel):
+    is_active: bool
+
+
+@router.post("/users/{user_id}/active", status_code=204)
+def set_user_active(user_id: uuid.UUID, body: ActiveIn, user: CurrentUser, s: DB):
+    require_global(user, Perm.MANAGE_USERS)
+    if user_id == user.id and not body.is_active:
+        raise HTTPException(422, "you cannot deactivate your own account")
+    _guard(user_svc.set_active, s, user_id, body.is_active, user.email)
 
 
 # ---------------------------------------------------------------- reference
@@ -530,6 +631,41 @@ class RoomIn(BaseModel):
 def add_room(project_id: uuid.UUID, body: RoomIn, user: CurrentUser, s: DB):
     project_access(s, user, project_id, Perm.EDIT_ESTIMATE)
     return {"id": str(_guard(wbs_svc.add_room, s, project_id, body.floor_id, body.code, body.name, body.zone_id).id)}
+
+
+class NodePatch(BaseModel):
+    code: str | None = None
+    name: str | None = None
+    level: int | None = None
+    is_basement: bool | None = None
+    gross_floor_area_m2: Decimal | None = None
+    zone_id: uuid.UUID | None = None
+
+
+WBS_KINDS = {"buildings": "building", "floors": "floor", "zones": "zone", "rooms": "room"}
+
+
+@router.patch("/projects/{project_id}/wbs/{kind}/{node_id}")
+def update_wbs_node(project_id: uuid.UUID, kind: str, node_id: uuid.UUID, body: NodePatch, user: CurrentUser, s: DB):
+    if kind not in WBS_KINDS:
+        raise HTTPException(404, "not found")
+    project_access(s, user, project_id, Perm.EDIT_ESTIMATE)
+    with s.begin_nested():
+        _guard(wbs_svc.update_node, s, project_id, WBS_KINDS[kind], node_id, body.model_dump(exclude_unset=True), user.email)
+    return wbs_svc.wbs(s, project_id)
+
+
+@router.delete("/projects/{project_id}/wbs/{kind}/{node_id}", status_code=204)
+def delete_wbs_node(project_id: uuid.UUID, kind: str, node_id: uuid.UUID, user: CurrentUser, s: DB):
+    if kind not in WBS_KINDS:
+        raise HTTPException(404, "not found")
+    project_access(s, user, project_id, Perm.EDIT_ESTIMATE)
+    try:
+        _guard(wbs_svc.delete_node, s, project_id, WBS_KINDS[kind], node_id, user.email)
+    except HTTPException as exc:
+        if exc.status_code == 422 and "still used" in str(exc.detail):
+            raise HTTPException(409, exc.detail) from None
+        raise
 
 
 # ---------------------------------------------------------------- estimates
