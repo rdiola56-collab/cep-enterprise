@@ -19,6 +19,7 @@ from .assembly import Assembly, MaterialComponent
 from .costing import calculate_item
 from .estimate import EstimateItem
 from .formula.evaluator import FormulaDefinition, FormulaEvaluationError, RawInput, evaluate
+from .formula.library import MEASURED_FORMULA_FOR_KIND
 from .rates import RateBook
 from .units import Quantity
 
@@ -53,12 +54,24 @@ class EstimatingEngine:
         formula_version: int | None = None,
         target_days: Decimal | None = None,
         priced_item_code: str | None = None,
+        quantity_basis: str = "formula",
     ) -> EstimateItem:
         mod = get_module(module) if isinstance(module, str) else module
         if mod.kind != "estimating" or mod.status != "configured":
             raise ValidationFailed([f"module '{mod.name}' does not take estimate items"])
         it = mod.item_type(item_type)
-        formula = self.formulas(it.formula_code, formula_version)
+        if quantity_basis == "formula":
+            formula = self.formulas(it.formula_code, formula_version)
+        elif quantity_basis == "measured":
+            # The quantity was measured directly (drawing takeoff, BIM quantity set). It still goes
+            # through a shared, versioned formula of the same dimension as the item type's own.
+            kind = self.formulas(it.formula_code, None).output_kind
+            code = MEASURED_FORMULA_FOR_KIND.get(kind)
+            if code is None:
+                raise ValidationFailed([f"{it.label} cannot take a directly measured {kind}"])
+            formula = self.formulas(code, formula_version)
+        else:
+            raise ValidationFailed([f"unknown quantity basis '{quantity_basis}'"])
         try:
             result = evaluate(formula, inputs)
         except FormulaEvaluationError as exc:

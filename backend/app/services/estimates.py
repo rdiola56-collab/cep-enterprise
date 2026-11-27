@@ -74,6 +74,7 @@ def calculate_item(
     actor: str = "system",
     project_id: uuid.UUID | None = None,
     priced_item_code: str | None = None,
+    quantity_basis: str = "formula",
 ) -> m.EstimateItemRecord:
     """Calculate (or recalculate) one estimate item. Same item_key → same row, never a duplicate."""
     v = _version(s, version_id, project_id)
@@ -86,7 +87,7 @@ def calculate_item(
     result = engine.calculate_item(
         item_id=item_key, module=module, item_type=item_type, inputs=_raw_inputs(inputs), as_of=v.pricing_date,
         description=description, condition=condition, assembly_code=assembly_code,
-        priced_item_code=priced_item_code,
+        priced_item_code=priced_item_code, quantity_basis=quantity_basis,
     )
     b = result.breakdown
     fs = result.quantity_source
@@ -111,7 +112,7 @@ def calculate_item(
     item.building_id, item.floor_id, item.zone_id, item.room_id = building_id, floor_id, zone_id, room_id
     item.assembly_revision_id, item.formula_version_id = assembly_revision_id, formula_version_id
     item.priced_item_code = priced_item_code
-    item.condition, item.inputs = condition, inputs
+    item.condition, item.inputs, item.quantity_basis = condition, inputs, quantity_basis
     item.quantity, item.unit = b.quantity, b.unit
     item.amount, item.unit_rate = b.total_amount, b.unit_rate
     item.breakdown = b.to_dict()
@@ -306,7 +307,7 @@ def new_revision(s: Session, version_id: uuid.UUID, pricing_date: date | None = 
         takeoff = s.scalars(select(m.QuantityTakeoff).where(m.QuantityTakeoff.estimate_item_id == it.id)).first()
         calculate_item(s, v.id, item_key=it.item_key, module=it.module, item_type=it.item_type, inputs=it.inputs,
                        description=it.description, condition=it.condition, assembly_code=rec.code if rec else None,
-                       priced_item_code=it.priced_item_code,
+                       priced_item_code=it.priced_item_code, quantity_basis=it.quantity_basis,
                        building_id=it.building_id, floor_id=it.floor_id, zone_id=it.zone_id, room_id=it.room_id,
                        source=takeoff.source if takeoff else "manual",
                        drawing_reference_id=takeoff.drawing_reference_id if takeoff else None,

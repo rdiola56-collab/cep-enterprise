@@ -198,4 +198,32 @@ def standard_formulas() -> list[FormulaDefinition]:
             output_unit="lot",
             inputs=(InputSpec("lots", "dimensionless", "lot", "Number of lots", default=Decimal(1), min_value=Decimal(0)),),
         ),
+        *measured_formulas(),
+    ]
+
+
+# Output kind of an item type's formula → the formula used when that quantity is
+# measured directly (from a drawing takeoff or a BIM quantity set) instead of from dimensions.
+MEASURED_FORMULA_FOR_KIND = {
+    "length": "MEASURED_LENGTH",
+    "area": "MEASURED_AREA",
+    "volume": "MEASURED_VOLUME",
+    "mass": "MEASURED_MASS",
+    "dimensionless": "MEASURED_COUNT",
+}
+
+
+def measured_formulas() -> list[FormulaDefinition]:
+    units = {"length": "m", "area": "m2", "volume": "m3", "mass": "kg", "dimensionless": "pcs"}
+    return [
+        FormulaDefinition(
+            code=code,
+            name=f"Measured {kind if kind != 'dimensionless' else 'count'}",
+            expression="measured",
+            output_kind=kind,
+            output_unit=units[kind],
+            inputs=(InputSpec("measured", kind, units[kind], "Measured quantity (takeoff or model)", min_value=Decimal(0)),),
+            description="Quantity measured directly on a drawing or taken from a BIM quantity set.",
+        )
+        for kind, code in MEASURED_FORMULA_FOR_KIND.items()
     ]
