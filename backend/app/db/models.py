@@ -419,6 +419,8 @@ class EstimateItemRecord(Base):
     assembly_revision_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("assembly_revisions.id"))
     priced_item_code: Mapped[str | None] = mapped_column(String(60))  # direct-priced items (provisional sums)
     formula_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("formula_versions.id"))
+    # "formula": dimensions → the item type's formula; "measured": a quantity measured on a drawing/model
+    quantity_basis: Mapped[str] = mapped_column(String(20), default="formula", server_default="formula")
     condition: Mapped[str] = mapped_column(String(30))
     inputs: Mapped[dict] = mapped_column(JSONB)  # raw measured inputs as entered
     quantity: Mapped[Decimal] = mapped_column(QTY)
@@ -568,6 +570,93 @@ class BimElement(Base):
     category: Mapped[str] = mapped_column(String(120))
     properties: Mapped[dict] = mapped_column(JSONB, default=dict)
     __table_args__ = (UniqueConstraint("project_id", "model_name", "model_revision", "element_guid"),)
+
+
+# ---------------------------------------------------------------- drawing / BIM import pipeline
+
+
+class ImportMappingRule(Base):
+    """Project configuration: which drawing markups / layers / BIM elements become which item type,
+    and which measured value feeds which formula input. Rules hold no prices and no arithmetic."""
+
+    __tablename__ = "import_mapping_rules"
+    id: Mapped[uuid.UUID] = pk()
+    project_id: Mapped[uuid.UUID] = project_fk(False)
+    code: Mapped[str] = mapped_column(String(60))
+    adapter: Mapped[str] = mapped_column(String(30))  # takeoff_csv | dxf | ifc
+    match_group: Mapped[str] = mapped_column(String(200))  # glob on subject / layer / IFC class
+    match_label: Mapped[str | None] = mapped_column(String(200))  # optional glob on label / block / type name
+    match_properties: Mapped[dict] = mapped_column(JSONB, default=dict)  # exact property values
+    module: Mapped[str] = mapped_column(String(40))
+    item_type: Mapped[str] = mapped_column(String(40))
+    assembly_code: Mapped[str | None] = mapped_column(String(60))
+    priced_item_code: Mapped[str | None] = mapped_column(String(60))
+    quantity_basis: Mapped[str] = mapped_column(String(20), default="measured")
+    input_map: Mapped[dict] = mapped_column(JSONB)  # formula input → measure name, or {"value", "unit"}
+    condition: Mapped[str] = mapped_column(String(30), default="normal")
+    aggregate: Mapped[bool] = mapped_column(Boolean, default=False)  # one item per rule and floor
+    priority: Mapped[int] = mapped_column(Integer, default=100)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = created()
+    __table_args__ = (
+        UniqueConstraint("project_id", "code", name="uq_import_rule_code"),
+        CheckConstraint("adapter in ('takeoff_csv','dxf','ifc')", name="ck_import_rule_adapter"),
+        CheckConstraint("quantity_basis in ('formula','measured')", name="ck_import_rule_basis"),
+        CheckConstraint("NOT aggregate OR quantity_basis = 'measured'", name="ck_import_rule_aggregate_measured"),
+    )
+
+
+class ImportBatch(Base):
+    __tablename__ = "import_batches"
+    id: Mapped[uuid.UUID] = pk()
+    project_id: Mapped[uuid.UUID] = project_fk(False)
+    estimate_version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    adapter: Mapped[str] = mapped_column(String(30))
+    source_name: Mapped[str] = mapped_column(String(200))  # drawing set or model name: the item-key namespace
+    source_revision: Mapped[str] = mapped_column(String(40))
+    file_name: Mapped[str] = mapped_column(String(255))
+    file_sha256: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20), default="staged")  # staged | committed | discarded
+    options: Mapped[dict] = mapped_column(JSONB, default=dict)
+    summary: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_by: Mapped[str] = mapped_column(String(120))
+    created_at: Mapped[datetime] = created()
+    committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        ForeignKeyConstraint(["estimate_version_id", "project_id"], ["estimate_versions.id", "estimate_versions.project_id"]),
+        UniqueConstraint("id", "project_id"),
+        CheckConstraint("status in ('staged','committed','discarded')", name="ck_import_batch_status"),
+    )
+
+
+class ImportRow(Base):
+    __tablename__ = "import_rows"
+    id: Mapped[uuid.UUID] = pk()
+    project_id: Mapped[uuid.UUID] = project_fk(False)
+    batch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    row_no: Mapped[int] = mapped_column(Integer)
+    source_ref: Mapped[str] = mapped_column(String(200))  # markup id / entity handle / IFC GlobalId
+    group: Mapped[str] = mapped_column(String(200))
+    label: Mapped[str] = mapped_column(String(300), default="")
+    level: Mapped[str | None] = mapped_column(String(120))  # page label / storey, matched to a WBS floor
+    measures: Mapped[dict] = mapped_column(JSONB, default=dict)  # name → {"value", "unit"}
+    properties: Mapped[dict] = mapped_column(JSONB, default=dict)
+    status: Mapped[str] = mapped_column(String(20))  # mapped | unmapped | invalid | excluded | imported
+    read_errors: Mapped[list] = mapped_column(JSONB, default=list)  # problems reading the source row itself
+    messages: Mapped[list] = mapped_column(JSONB, default=list)  # mapping / validation results ("note: …" = advisory)
+    rule_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("import_mapping_rules.id"))
+    rule_snapshot: Mapped[dict | None] = mapped_column(JSONB)
+    item_key: Mapped[str | None] = mapped_column(String(120))
+    floor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    preview: Mapped[dict | None] = mapped_column(JSONB)  # quantity / unit / amount the engine computed
+    drawing_reference_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("drawing_references.id"))
+    bim_element_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("bim_elements.id"))
+    __table_args__ = (
+        ForeignKeyConstraint(["batch_id", "project_id"], ["import_batches.id", "import_batches.project_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["floor_id", "project_id"], ["floors.id", "floors.project_id"]),
+        CheckConstraint("status in ('mapped','unmapped','invalid','excluded','imported')", name="ck_import_row_status"),
+        Index("ix_import_rows_batch_row", "batch_id", "row_no"),
+    )
 
 
 # ---------------------------------------------------------------- reports, approvals, audit

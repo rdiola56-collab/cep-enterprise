@@ -15,7 +15,7 @@ network calls. There are no microservices at this stage.
 | 5 | Construction assembly | `app/engine/assembly.py`, `services/library.py` | Built and tested |
 | 6 | Cost calculation | `app/engine/costing.py`, `app/engine/rates.py` | Built and tested |
 | 7 | Database and data access | `app/db/`, `services/ratebook.py`, `migrations/` | Built and tested |
-| 8 | Drawing and BIM integration | `drawing_references`, `bim_elements` tables only | **Not built** (phase 5) |
+| 8 | Drawing and BIM integration | `app/integrations/`, `services/imports.py` | Takeoff CSV, DXF and IFC built and tested; DWG, RVT and PDF not built (see below) |
 | 9 | Reporting and export | `services/estimates.py`, `services/reports.py` | BOQ, summaries, Excel (openpyxl) and PDF (ReportLab) export built and tested |
 
 ## The one calculation path
@@ -52,6 +52,51 @@ rules. Adding a module is configuration.
   estimate item records the formula version used, the inputs as entered, their
   SI values, and the methodology with values substituted, e.g.
   `(([6 m] × [300 mm]) × [600 mm]) × [10 pcs]`.
+
+## Drawing and BIM import
+
+```
+file ──adapter──▶ staged rows: what was measured, with units, where (page / layer / storey)
+     ──rules────▶ module, item type, formula inputs, floor          (project configuration, no prices)
+     ──engine───▶ preview: quantity, unit, amount per item          (EstimatingEngine.calculate_item)
+     ──commit───▶ estimate items; takeoffs point at the drawing markup or BIM element
+```
+
+- **Adapters** (`app/integrations/`) only read files. Takeoff CSV reads a Bluebeam
+  Markups Summary export: every measured cell must carry its unit, and feet-inches
+  such as `12'-6"` are accepted. DXF reads lengths, closed areas (bulge arcs are
+  measured exactly) and block counts by layer. A drawing without `$INSUNITS` is
+  refused unless the user states its unit. IFC reads each element's quantity sets
+  and properties, plus its storey. Model units are converted to SI exactly for SI
+  and the standard imperial units. Quantities are never derived from geometry: an
+  element without quantity sets has only a count.
+- **Mapping rules** (`import_mapping_rules`) are project configuration. A rule
+  matches on a glob for subject, layer or IFC class, plus an optional label and
+  property values. It names the module and item type, and says which measured
+  value feeds which formula input. The first match by priority wins.
+- **Quantity basis**:
+  - `formula`: dimensions go into the item type's own formula, e.g. wall
+    Length × Height → WALL_AREA.
+  - `measured`: the measured quantity goes through a shared `MEASURED_<KIND>`
+    formula of the same dimension, e.g. NetVolume → MEASURED_VOLUME. It is still
+    versioned and still recorded on the takeoff, and the item keeps its basis
+    across revisions.
+- **Aggregation**: only measured quantities can be aggregated (one item per rule
+  and floor). Summing dimensions would be wrong, and the database refuses it.
+- **Validation is never bypassed**:
+  - A batch can be committed only when every row is mapped and valid, or excluded
+    by a person with a reason.
+  - Commit re-applies the rules and re-prices everything, so changed rules or
+    prices are picked up.
+  - The commit is all or nothing.
+  - Approved versions take no imports.
+- **Stable item keys**: keys have the form `adapter:source:markup-id`, or
+  `adapter:source:rule@floor` for aggregated items. Re-importing a revised file
+  therefore recalculates the same items instead of duplicating them. Items that
+  disappeared from the source are listed, and are removed only on request.
+- **Traceability**: each row keeps its file's SHA-256, its source id and the rule
+  snapshot used. Each takeoff links to a `drawing_references` or `bim_elements`
+  row.
 
 ## Units and precision
 
@@ -111,7 +156,7 @@ Consolidation is available by module, trade, assembly, building, floor, zone and
 ## Modules
 
 Modules 1–16 each declare item types → shared formula → default assembly (or
-direct pricing for provisional sums). 39 item types share 13 formulas, e.g.
+direct pricing for provisional sums). 39 item types share 13 formulas (plus 5 MEASURED_* formulas for imported quantities), e.g.
 COUNT serves doors, plate counts, plumbing rough-ins, boxes, sprinkler heads,
 FDAS devices and wheel stoppers. Modules 17–19 are workspaces over the
 library and estimate services and take no items themselves.
@@ -123,8 +168,9 @@ clear error instead of a made-up figure.
 
 ## Not built yet (and not presented as working)
 
-- Bluebeam, PDF takeoff, DWG/DXF, IFC and Revit: no adapters or import pipeline
-  yet. Only the reference tables exist.
+- Native DWG and Revit (.rvt) files, and measuring directly on PDF drawings.
+  Save DWG as DXF, export IFC from Revit, and measure PDFs in Bluebeam and import
+  the Markups Summary CSV. The importer lists these as "not built".
 - Celery jobs (Redis is in docker-compose for that later); exports run in the request.
 - WBS tree editing screen (buildings/floors/zones/rooms have API endpoints only).
 - Single sign-on, password reset, account lockout after failed attempts.

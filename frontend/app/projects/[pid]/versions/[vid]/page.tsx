@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { use, useEffect, useMemo, useState } from "react";
 import BulkEntry from "@/components/BulkEntry";
 import ItemEditor, { type EditableItem } from "@/components/ItemEditor";
@@ -89,6 +90,7 @@ export default function VersionPage({ params }: { params: Promise<{ pid: string;
         <h1 className="mr-auto text-xl font-semibold">
           Detailed estimate <span className="muted text-sm">({summary?.status ?? "…"})</span>
         </h1>
+        {!locked && <Link className="panel px-3 py-1 text-sm" href={`${base}/import`}>Import drawings / BIM</Link>}
         <button className="panel px-3 py-1 text-sm" onClick={() => act(() => download(`${base}/export.xlsx`, "estimate.xlsx"))}>Export Excel</button>
         <button className="panel px-3 py-1 text-sm" onClick={() => act(() => download(`${base}/export.pdf`, "estimate.pdf"))}>Export PDF</button>
         {summary?.status === "draft" && <button className="btn text-sm" onClick={() => act(() => api(`${base}/approve`, { method: "POST" }))}>Approve version</button>}

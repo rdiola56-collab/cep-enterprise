@@ -108,3 +108,16 @@ export async function download(path: string, fallbackName: string) {
 export type WbsFloor = { id: string; code: string; name: string; level: number; is_basement: boolean;
   rooms: { id: string; code: string; name: string }[]; zones: { id: string; code: string; name: string }[] };
 export type WbsBuilding = { id: string; code: string; name: string; floors: WbsFloor[] };
+
+/** multipart upload (the browser sets the boundary, so no JSON content type) */
+export async function upload<T>(path: string, form: FormData): Promise<T> {
+  const token = getToken();
+  const res = await fetch(`/api${path}`, { method: "POST", body: form, headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (res.status === 401) {
+    setToken(null);
+    window.location.href = "/login";
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(typeof body.detail === "string" ? body.detail : `Upload failed (${res.status})`, res.status);
+  return body as T;
+}

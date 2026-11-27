@@ -6,7 +6,7 @@ shared by all 19 estimating modules.
 
 Phases 1–2 deliver the engine and its foundations; phase 3 connects all 19
 modules and adds sign-in with role permissions; phase 4 adds Excel/PDF export
-and the editing screens. See
+and the editing screens; phase 5 adds drawing and BIM quantity import. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and for what is
 not built yet.
 
@@ -40,6 +40,12 @@ not built yet.
   By floor, with live SUM formulas) and PDF export (executive summary, trade
   analysis, BOQ), both built from the same report data and logged per export.
   Draft estimates are labelled DRAFT.
+- Drawing and BIM quantity import: takeoff CSV (Bluebeam Markups Summary), DXF
+  drawings and IFC models. Project mapping rules turn markups, layers or model
+  elements into item types; every quantity is then priced through the engine like a
+  manual entry. Rows are reviewed before import, re-importing a revised file updates
+  the same items, and each item traces back to its markup or model element.
+  Sample files are in `samples/`.
 
 ## Acceptance tests (spec §12)
 
@@ -52,8 +58,8 @@ not built yet.
 | 5 | Automatic BOQ consolidation | Passing | `test_at5_*` (engine and database) |
 | 6 | Project data isolation | Passing | `test_acceptance_db.py::test_at6_*` |
 | 7 | Estimate revision comparison | Passing | `test_at7_*` (engine and database) |
-| 8 | Drawing quantity import through the engine | **Not built** (phase 5) | |
-| 9 | BIM quantity mapping to assemblies | **Not built** (phase 5) | |
+| 8 | Drawing quantity import through the engine | Passing | `test_acceptance_import.py::test_at8_*`, `test_integrations.py` |
+| 9 | BIM quantity mapping to assemblies | Passing | `test_acceptance_import.py::test_at9_*` |
 | 10 | Accurate cost reporting | Passing | `test_costing.py::test_rate_analysis_hand_calculation`, `test_at10_*` |
 
 The reference case for test 10 (100 m² of floor tiling) is checked by hand:

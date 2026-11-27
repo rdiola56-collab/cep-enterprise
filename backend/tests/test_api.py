@@ -164,3 +164,39 @@ def test_provisional_sum_through_the_api(client):
     v2 = client.post(f"{url}/revisions", json={}, headers=h).json()["version_id"]
     items = client.get(f"/api/projects/{pid}/versions/{v2}/items", headers=h).json()
     assert items[0]["amount"].startswith("17500000")
+
+
+def test_drawing_import_over_http(client):
+    from . import import_samples as smp
+
+    h, view = auth(client, "est@cep.test"), auth(client, "view@cep.test")
+    assert client.get("/api/import/adapters", headers=h).json()["rvt"]["status"].startswith("not built")
+    pid = client.post("/api/projects", json={"code": "I", "name": "Import", "currency": "PHP"}, headers=h).json()["id"]
+    v = client.post(f"/api/projects/{pid}/estimates", headers=h,
+                    json={"code": "E", "name": "E", "pricing_date": "2026-11-01"}).json()["version_id"]
+    rule = {"code": "TILE", "adapter": "takeoff_csv", "match_group": "Floor Tile", "module": "tiling",
+            "item_type": "floor_tile", "input_map": {"measured": "area"}}
+    assert client.post(f"/api/projects/{pid}/import-rules", json=rule, headers=h).status_code == 201
+    assert client.post(f"/api/projects/{pid}/import-rules", json={**rule, "code": "BAD", "module": "nope"},
+                       headers=h).status_code == 422
+    csv_bytes = smp.takeoff_csv([("A1", "Floor Tile", "Lobby", "L02", "100 m2"), ("A2", "Ceiling", "x", "L02", "5 m2")])
+    form = {"adapter": "takeoff_csv", "source_name": "A-201", "source_revision": "C"}
+    files = {"file": ("tiles.csv", csv_bytes, "text/csv")}
+    url = f"/api/projects/{pid}/versions/{v}/imports"
+    assert client.post(url, data=form, files=files, headers=view).status_code in (403, 404)
+    assert client.post(url, data={**form, "adapter": "dxf"}, files=files, headers=h).status_code == 422  # not a DXF
+    r = client.post(url, data=form, files=files, headers=h)
+    assert r.status_code == 201, r.text
+    batch = r.json()
+    assert batch["summary"]["counts"] == {"mapped": 1, "unmapped": 1}
+    burl = f"/api/projects/{pid}/imports/{batch['id']}"
+    assert client.post(f"{burl}/commit", json={}, headers=h).status_code == 409
+    ceiling = next(x for x in batch["rows"] if x["status"] == "unmapped")
+    r = client.post(f"{burl}/exclude", json={"row_ids": [ceiling["id"]], "reason": "by others"}, headers=h)
+    assert r.json()["summary"]["ready"]
+    done = client.post(f"{burl}/commit", json={}, headers=h).json()
+    assert done["status"] == "committed"
+    items = client.get(f"/api/projects/{pid}/versions/{v}/items", headers=h).json()
+    assert [(i["item_key"], i["amount"][:8], i["quantity_basis"]) for i in items] == [
+        ("takeoff_csv:A-201:A1", "62584.43", "measured")]
+    assert len(client.get(f"/api/projects/{pid}/imports", headers=view).json()) == 1

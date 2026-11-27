@@ -571,6 +571,7 @@ class ItemIn(BaseModel):
     condition: str = "normal"
     assembly_code: str | None = None
     priced_item_code: str | None = None
+    quantity_basis: str = "formula"  # "measured": a quantity taken off a drawing, through the MEASURED_* formula
     building_id: uuid.UUID | None = None
     floor_id: uuid.UUID | None = None
     zone_id: uuid.UUID | None = None
@@ -585,7 +586,8 @@ def _item_out(it: m.EstimateItemRecord) -> dict:
             "building_id": str(it.building_id) if it.building_id else None,
             "floor_id": str(it.floor_id) if it.floor_id else None,
             "zone_id": str(it.zone_id) if it.zone_id else None,
-            "room_id": str(it.room_id) if it.room_id else None, "breakdown": it.breakdown}
+            "room_id": str(it.room_id) if it.room_id else None, "quantity_basis": it.quantity_basis,
+            "breakdown": it.breakdown}
 
 
 @router.post("/projects/{project_id}/versions/{version_id}/items")
