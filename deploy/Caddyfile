@@ -1,0 +1,10 @@
+# Caddy in front of CEP. With a domain name in CEP_SITE_ADDRESS it gets and renews an
+# HTTPS certificate by itself (ports 80 and 443 must reach this server). With ":80" it
+# serves plain HTTP, for a first try on a private network only.
+{$CEP_SITE_ADDRESS::80} {
+	encode gzip
+	request_body {
+		max_size 200MB
+	}
+	reverse_proxy frontend:3000
+}
