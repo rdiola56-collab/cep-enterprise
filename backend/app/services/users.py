@@ -35,6 +35,8 @@ def create_user(s: Session, email: str, name: str, password: str, global_role: s
 MAX_FAILED_LOGINS = int(os.environ.get("CEP_MAX_FAILED_LOGINS", 5))
 LOCKOUT = timedelta(minutes=int(os.environ.get("CEP_LOCKOUT_MINUTES", 15)))
 RESET_TTL = timedelta(hours=int(os.environ.get("CEP_RESET_LINK_HOURS", 24)))
+SELF_RESET_TTL = timedelta(minutes=int(os.environ.get("CEP_SELF_RESET_MINUTES", 60)))
+SELF_RESETS_PER_HOUR = 3
 
 
 class AccountLocked(PermissionError):
@@ -60,6 +62,9 @@ def authenticate(s: Session, email: str, password: str) -> User | None:
         if u.failed_logins >= MAX_FAILED_LOGINS:
             u.locked_until, u.failed_logins = _now() + LOCKOUT, 0
             audit(s, None, "users", u.id, "locked", "system", {"minutes": LOCKOUT.total_seconds() / 60})
+            from . import notify
+
+            notify.account_locked(s, u, int(LOCKOUT.total_seconds() // 60))
         s.flush()
         return None
     u.failed_logins, u.locked_until = 0, None
@@ -73,25 +78,49 @@ def change_password(s: Session, user: User, current: str, new: str) -> None:
     user.password_hash = hash_password(new)
     user.token_version += 1  # other sessions end; the caller issues a fresh token
     audit(s, None, "users", user.id, "change_password", user.email, {})
+    from . import notify
+
+    notify.password_changed(s, user, "changed from your account page")
 
 
-def issue_reset_link(s: Session, user_id: uuid.UUID, actor: str) -> tuple[str, datetime]:
-    """A one-time token for the administrator to hand to the user (CEP sends no email)."""
+def issue_reset_link(s: Session, user_id: uuid.UUID, actor: str, ttl: timedelta = RESET_TTL) -> tuple[str, datetime]:
+    """A one-time token. Emailed to the user when email is set up; the administrator also gets it to pass on."""
     u = s.get(User, user_id)
     if u is None:
         raise LookupError("user not found")
     token = secrets.token_urlsafe(32)
-    expires = _now() + RESET_TTL
+    expires = _now() + ttl
     s.add(PasswordReset(user_id=u.id, token_hash=hashlib.sha256(token.encode()).hexdigest(), expires_at=expires, created_by=actor))
     s.flush()
-    audit(s, None, "users", u.id, "reset_link", actor, {"expires_at": expires.isoformat()})
+    from . import notify
+
+    emailed = notify.reset_link(s, u, token, expires, actor) is not None
+    audit(s, None, "users", u.id, "reset_link", actor, {"expires_at": expires.isoformat(), "emailed": emailed})
     return token, expires
+
+
+def request_reset(s: Session, email: str) -> None:
+    """'Forgot password': email a short-lived link if the address belongs to an active account.
+    Says nothing either way, so the form cannot be used to find out who has an account."""
+    from . import mail
+
+    if not mail.enabled():
+        raise ValueError("password reset by email is not set up; ask your administrator for a reset link")
+    u = s.scalars(select(User).where(User.email == email.strip().lower())).first()
+    if u is None or not u.is_active:
+        return
+    recent = s.scalars(select(PasswordReset).where(PasswordReset.user_id == u.id,
+                                                   PasswordReset.created_at > _now() - timedelta(hours=1))).all()
+    if len(recent) >= SELF_RESETS_PER_HOUR:
+        audit(s, None, "users", u.id, "reset_request_throttled", u.email, {})
+        return
+    issue_reset_link(s, u.id, u.email, SELF_RESET_TTL)
 
 
 def reset_password(s: Session, token: str, new: str) -> User:
     r = s.scalars(select(PasswordReset).where(PasswordReset.token_hash == hashlib.sha256(token.encode()).hexdigest())).first()
     if r is None or r.used_at is not None or r.expires_at < _now():
-        raise ValueError("this reset link is invalid, used or expired; ask an administrator for a new one")
+        raise ValueError("this reset link is invalid, used or expired; ask for a new one")
     u = s.get(User, r.user_id)
     u.password_hash = hash_password(new)  # validates length before anything is marked used
     r.used_at = _now()
@@ -99,6 +128,9 @@ def reset_password(s: Session, token: str, new: str) -> User:
     u.token_version += 1
     s.flush()
     audit(s, None, "users", u.id, "reset_password", u.email, {})
+    from . import notify
+
+    notify.password_changed(s, u, "reset with a one-time link")
     return u
 
 

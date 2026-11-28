@@ -189,8 +189,11 @@ Consolidation is available by module, trade, assembly, building, floor, zone and
   Administrators can unlock an account.
 - **Password reset**: an administrator issues a one-time reset link, valid for 24 hours
   (`CEP_RESET_LINK_HOURS`). Only a SHA-256 hash of the token is stored. Using the link
-  sets the password, unlocks the account and signs out every session. CEP sends no
-  email, so the administrator passes the link on.
+  sets the password, unlocks the account and signs out every session. When email is
+  configured the link is emailed to the person; otherwise the administrator passes it on.
+  With email on, people can also ask for a link themselves ("Forgot your password?"):
+  valid for 60 minutes, at most 3 an hour, and the answer is the same whether or not
+  the account exists.
 - **Password change**: changing your own password signs out every other session.
 - **Single sign-on** (`app/auth/sso.py`) uses the OpenID Connect authorization code flow
   with PKCE, plus state and nonce stored server-side for 10 minutes.
@@ -206,6 +209,45 @@ Consolidation is available by module, trade, assembly, building, floor, zone and
   - It is tested against a simulated provider, including forged signatures, wrong
     audience, replayed state and wrong nonce. It has not been tried against a real
     tenant yet.
+- **SAML 2.0 single sign-on** (`app/auth/saml.py`, python3-saml with xmlsec) for
+  providers that offer SAML rather than OpenID Connect (ADFS, Okta, Entra ID, Google
+  Workspace, Shibboleth…).
+  - SP-initiated only: the request goes by HTTP-Redirect and the response comes back by
+    HTTP-POST to `<base>/api/auth/saml/acs`. CEP stores each request id for 10 minutes
+    and accepts one response to it, once; unsolicited (IdP-initiated) responses are refused.
+  - Assertions must be signed with the certificate in the IdP's metadata (SHA-1 and
+    other deprecated algorithms refused). Audience, recipient, destination and validity
+    window are checked.
+  - After the check, the browser gets a one-time code (2 minutes) in the URL fragment,
+    which the web app exchanges for a session. Accounts are linked as with OpenID
+    Connect: by email the first time, by IdP and NameID after.
+  - Configure it with `CEP_SAML_IDP_METADATA_URL` (or `CEP_SAML_IDP_METADATA_FILE`) and
+    `CEP_SAML_SP_BASE_URL`; give the IdP `<base>/api/auth/saml/metadata`. Optional:
+    `CEP_SAML_LABEL`, `CEP_SAML_EMAIL_ATTRIBUTE`, `CEP_SAML_AUTO_CREATE`,
+    `CEP_SAML_SP_CERT`/`CEP_SAML_SP_KEY` (sign requests), `CEP_SAML_SP_ENTITY_ID`.
+  - It is tested against a simulated IdP that signs real assertions, including
+    unsolicited, replayed, unsigned, wrongly signed, tampered, expired and
+    wrong-audience responses. It has not been tried against a real IdP yet.
+
+## Outgoing email
+
+`app/services/mail.py`, `app/services/notify.py`. Off until `CEP_SMTP_HOST`,
+`CEP_MAIL_FROM` and `CEP_APP_URL` are set.
+
+- Every message is written to an outbox table first, in the same transaction as the
+  change it reports. Without a worker it is sent right after; with Celery it is handed to
+  the worker only once that transaction commits (a rolled-back change sends nothing),
+  retried up to 5 times with backoff.
+- SMTP with `CEP_SMTP_SECURITY` = `starttls` (default), `ssl` or `none`, optional login
+  (`CEP_SMTP_USER`, `CEP_SMTP_PASSWORD`) and CA file (`CEP_SMTP_CA_FILE`). CEP never
+  falls back to plain text when STARTTLS was asked for.
+- Messages: reset links, password changed, account locked, added to a project or role
+  changed, and estimate version approved (to the project's managers and estimators).
+- Reset-link messages are hidden in the outbox and their body is blanked once sent.
+- Administrators see the outbox, failures with the server's error, a Retry button and a
+  test message on the user admin page.
+- Tested against a real local SMTP server (STARTTLS, login, self-signed CA), not yet
+  against your mail provider.
 
 ## Background jobs
 
@@ -237,5 +279,6 @@ clear error instead of a made-up figure.
 - Revit import has not been run against a real Autodesk Platform Services
   account yet; it shows "needs setup" until credentials are configured.
 - Raster (scanned) PDFs can be measured on screen, but offer no line work to snap to.
-- Outgoing email (reset links are handed over by an administrator).
-- SAML single sign-on (OpenID Connect only).
+- SAML has been tested against a simulated identity provider only, and email against a
+  local SMTP server only; neither has been run against your own provider yet.
+- SAML single logout and IdP-initiated sign-in are not supported.

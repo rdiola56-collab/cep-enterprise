@@ -5,14 +5,23 @@ import { api } from "@/lib/api";
 
 type U = { id: string; email: string; name: string; global_role: string; is_active: boolean; locked: boolean; sso_linked: boolean };
 const ROLES = ["admin", "cost_engineer", "estimator", "viewer"];
+type Mail = {
+  status: { enabled: boolean; detail?: string; server?: string; security?: string; sender?: string };
+  messages: { id: string; kind: string; to: string; subject: string; status: string; attempts: number; last_error: string | null;
+    created_at: string; sent_at: string | null }[];
+};
 
 export default function UsersPage() {
   const [users, setUsers] = useState<U[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [link, setLink] = useState<{ email: string; url: string; expires: string } | null>(null);
+  const [link, setLink] = useState<{ email: string; url: string; expires: string; emailed: boolean } | null>(null);
+  const [mail, setMail] = useState<Mail | null>(null);
   const [f, setF] = useState({ email: "", name: "", password: "", global_role: "estimator" });
 
-  const load = () => api<U[]>("/users").then(setUsers).catch((e) => setError(e.message));
+  const load = () => {
+    api<Mail>("/admin/mail").then(setMail).catch(() => undefined);
+    return api<U[]>("/users").then(setUsers).catch((e) => setError(e.message));
+  };
   useEffect(() => { load(); }, []);
 
   async function act(fn: () => Promise<unknown>) {
@@ -21,8 +30,8 @@ export default function UsersPage() {
   }
 
   const resetLink = (u: U) => act(async () => {
-    const r = await api<{ path: string; expires_at: string }>(`/users/${u.id}/reset-link`, { method: "POST" });
-    setLink({ email: u.email, url: `${window.location.origin}${r.path}`, expires: new Date(r.expires_at).toLocaleString() });
+    const r = await api<{ path: string; expires_at: string; emailed: boolean }>(`/users/${u.id}/reset-link`, { method: "POST" });
+    setLink({ email: u.email, url: `${window.location.origin}${r.path}`, expires: new Date(r.expires_at).toLocaleString(), emailed: r.emailed });
   });
 
   return (
@@ -31,7 +40,8 @@ export default function UsersPage() {
       {error && <div className="text-red-500">{error}</div>}
       {link && (
         <div className="panel space-y-1 p-4">
-          <div>One-time reset link for <b>{link.email}</b>, valid until {link.expires}. CEP does not email it: pass it on yourself.</div>
+          <div>One-time reset link for <b>{link.email}</b>, valid until {link.expires}.{" "}
+            {link.emailed ? "It was emailed to them (see the outbox below); you can also pass it on yourself." : "Email is not set up, so pass it on yourself."}</div>
           <input className="field w-full font-mono text-xs" readOnly value={link.url} onFocus={(e) => e.target.select()} />
           <button className="underline" onClick={() => navigator.clipboard?.writeText(link.url)}>Copy</button>{" "}
           <button className="underline" onClick={() => setLink(null)}>Done</button>
@@ -65,6 +75,33 @@ export default function UsersPage() {
           <select className="field" value={f.global_role} onChange={(e) => setF({ ...f, global_role: e.target.value })}>{ROLES.map((r) => <option key={r}>{r}</option>)}</select></label>
         <button className="btn">Add user</button>
       </form>
+      {mail && (
+        <section className="panel space-y-2 p-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="mr-auto font-medium">Email</h2>
+            {mail.status.enabled
+              ? <span className="text-xs"><span className="text-green-600">On</span> · {mail.status.server} ({mail.status.security}) · from {mail.status.sender}</span>
+              : <span className="text-xs text-amber-600">Off: {mail.status.detail}</span>}
+            <button className="panel px-3 py-1 text-xs" disabled={!mail.status.enabled}
+              onClick={() => act(() => api("/admin/mail/test", { method: "POST" }))}>Send me a test message</button>
+          </div>
+          <p className="muted text-xs">Reset links, lockout warnings, project invitations and approval notices. Messages with a reset link are not shown here and are blanked once sent.</p>
+          <table className="datagrid text-xs">
+            <thead><tr><th>When</th><th>To</th><th>Subject</th><th>Status</th><th className="num">Tries</th><th>Problem</th><th /></tr></thead>
+            <tbody>
+              {mail.messages.length === 0 && <tr><td colSpan={7} className="muted">No messages yet.</td></tr>}
+              {mail.messages.map((x) => (
+                <tr key={x.id}>
+                  <td className="whitespace-nowrap">{new Date(x.created_at).toLocaleString()}</td><td>{x.to}</td><td>{x.subject}</td>
+                  <td className={x.status === "sent" ? "text-green-600" : x.status === "failed" ? "text-red-500" : "text-amber-600"}>{x.status}</td>
+                  <td className="num">{x.attempts}</td><td className="muted">{x.last_error ?? ""}</td>
+                  <td>{x.status === "failed" && <button className="underline" onClick={() => act(() => api(`/admin/mail/${x.id}/retry`, { method: "POST" }))}>Retry</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
     </div>
   );
 }

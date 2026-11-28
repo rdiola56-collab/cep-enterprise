@@ -36,6 +36,22 @@ if MODE == "celery":
         run_job(uuid.UUID(job_id))
         return job_id
 
+    @celery_app.task(name="cep.send_email", bind=True, max_retries=4)
+    def send_email_task(self, message_id: str) -> str:
+        """Send one outbox message; retried with growing delays (1, 2, 4, 8 minutes) if the server refuses."""
+        from .db.session import session_scope
+        from .services import mail
+
+        with session_scope() as s:
+            msg = s.get(m.EmailMessage, uuid.UUID(message_id))
+            if msg is None or msg.status == "sent":
+                return message_id
+            ok = mail.deliver(s, msg)
+            attempts = msg.attempts
+        if not ok and attempts < mail.MAX_ATTEMPTS:
+            raise self.retry(countdown=60 * 2 ** (attempts - 1))
+        return message_id
+
 app = celery_app  # `celery -A app.jobs worker` looks for `app`
 
 

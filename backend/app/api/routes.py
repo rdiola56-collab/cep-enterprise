@@ -7,7 +7,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Form, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -106,11 +106,22 @@ def login(body: LoginIn, s: DB):
 
 @router.get("/auth/sso")
 def sso_info():
+    """What the sign-in page offers besides email and password."""
+    from ..auth import saml
+    from ..services import mail
+
+    out: dict = {"forgot_password": mail.enabled()}
     try:
         cfg = sso.config()
+        out |= {"enabled": cfg is not None, "label": cfg.label if cfg else None}
     except sso.SsoError as exc:
-        return {"enabled": False, "problem": str(exc)}
-    return {"enabled": cfg is not None, "label": cfg.label if cfg else None}
+        out |= {"enabled": False, "label": None, "problem": str(exc)}
+    try:
+        scfg = saml.config()
+        out["saml"] = {"enabled": scfg is not None, "label": scfg.label if scfg else None}
+    except saml.SamlError as exc:
+        out["saml"] = {"enabled": False, "label": None, "problem": str(exc)}
+    return out
 
 
 @router.post("/auth/sso/start")
@@ -142,6 +153,78 @@ def sso_callback(body: SsoCallbackIn, s: DB):
     return _session_out(user)
 
 
+# ---------------------------------------------------------------- SAML single sign-on
+
+
+def _saml_cfg():
+    from ..auth import saml
+
+    try:
+        cfg = saml.config()
+    except saml.SamlError as exc:
+        raise HTTPException(503, str(exc)) from None
+    if cfg is None:
+        raise HTTPException(404, "SAML single sign-on is not configured")
+    return cfg
+
+
+@router.get("/auth/saml/metadata")
+def saml_metadata():
+    """This service provider's metadata, for the identity provider's administrator."""
+    from ..auth import saml
+
+    try:
+        return Response(saml.metadata(_saml_cfg()), media_type="application/samlmetadata+xml")
+    except saml.SamlError as exc:
+        raise HTTPException(503, str(exc)) from None
+
+
+@router.post("/auth/saml/start")
+def saml_start(s: DB):
+    from ..auth import saml
+
+    try:
+        return {"redirect_url": saml.start(s, _saml_cfg())}
+    except saml.SamlError as exc:
+        raise HTTPException(503, str(exc)) from None
+
+
+@router.post("/auth/saml/acs")
+def saml_acs(s: DB, SAMLResponse: str = Form(...), RelayState: str | None = Form(None)):  # noqa: N803  (SAML names)
+    """The identity provider posts the browser here. The browser is sent on to the web app with a one-time code."""
+    from urllib.parse import quote
+
+    from fastapi.responses import RedirectResponse
+
+    from ..auth import saml
+
+    cfg = _saml_cfg()
+    try:
+        user = saml.finish(s, cfg, SAMLResponse, RelayState)
+        code = saml.issue_handoff(s, user)
+    except saml.SamlError as exc:
+        s.commit()  # the request id stays used
+        return RedirectResponse(f"{cfg.app_url}/login?sso_error={quote(str(exc))}", status_code=303)
+    s.commit()  # the web app redeems the code straight away
+    return RedirectResponse(f"{cfg.app_url}/login/sso#handoff={code}", status_code=303)
+
+
+class HandoffIn(BaseModel):
+    code: str
+
+
+@router.post("/auth/saml/redeem")
+def saml_redeem(body: HandoffIn, s: DB):
+    from ..auth import saml
+
+    try:
+        user = saml.redeem(s, body.code)
+    except saml.SamlError as exc:
+        s.commit()
+        raise HTTPException(401, str(exc)) from None
+    return _session_out(user)
+
+
 class PasswordChangeIn(BaseModel):
     current_password: str
     new_password: str
@@ -156,6 +239,20 @@ def change_password(body: PasswordChangeIn, user: CurrentUser, s: DB):
 class ResetIn(BaseModel):
     token: str
     new_password: str
+
+
+class ForgotIn(BaseModel):
+    email: str
+
+
+@router.post("/auth/forgot", status_code=202)
+def forgot_password(body: ForgotIn, s: DB):
+    """Always the same answer, whether or not the address has an account."""
+    try:
+        user_svc.request_reset(s, body.email)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return {"detail": "If that address belongs to a CEP account, a reset link is on its way. It works once, for one hour."}
 
 
 @router.post("/auth/reset")
@@ -194,6 +291,36 @@ def create_user(body: UserIn, user: CurrentUser, s: DB):
     return {"id": str(u.id), "email": u.email, "global_role": u.global_role}
 
 
+# ---------------------------------------------------------------- email (administrators)
+
+
+@router.get("/admin/mail")
+def mail_status(user: CurrentUser, s: DB, limit: int = 50):
+    from ..services import mail
+
+    require_global(user, Perm.MANAGE_USERS)
+    return {"status": mail.status(), "messages": [mail.message_dict(x) for x in mail.outbox(s, limit)]}
+
+
+@router.post("/admin/mail/test")
+def mail_test(user: CurrentUser, s: DB):
+    from ..services import mail, notify
+
+    require_global(user, Perm.MANAGE_USERS)
+    msg = notify.test_message(s, user)
+    if msg is None:
+        raise HTTPException(409, mail.status()["detail"])
+    return mail.message_dict(msg)
+
+
+@router.post("/admin/mail/{message_id}/retry")
+def mail_retry(message_id: uuid.UUID, user: CurrentUser, s: DB):
+    from ..services import mail
+
+    require_global(user, Perm.MANAGE_USERS)
+    return mail.message_dict(_guard(mail.retry, s, message_id))
+
+
 @router.get("/users")
 def list_users(user: CurrentUser, s: DB):
     require_global(user, Perm.MANAGE_USERS)
@@ -206,10 +333,13 @@ def list_users(user: CurrentUser, s: DB):
 
 @router.post("/users/{user_id}/reset-link")
 def reset_link(user_id: uuid.UUID, user: CurrentUser, s: DB):
-    """Returns a one-time token once. CEP sends no email: the administrator passes the link on."""
+    """Returns a one-time token once, and emails it to the user when email is set up."""
+    from ..services import mail
+
     require_global(user, Perm.MANAGE_USERS)
     token, expires = _guard(user_svc.issue_reset_link, s, user_id, user.email)
-    return {"token": token, "path": f"/reset-password?token={token}", "expires_at": expires.isoformat()}
+    return {"token": token, "path": f"/reset-password?token={token}", "expires_at": expires.isoformat(),
+            "emailed": mail.enabled()}
 
 
 @router.post("/users/{user_id}/unlock", status_code=204)
@@ -568,9 +698,15 @@ class MemberIn(BaseModel):
 @router.put("/projects/{project_id}/members", status_code=200)
 def set_member(project_id: uuid.UUID, body: MemberIn, user: CurrentUser, s: DB):
     project_access(s, user, project_id, Perm.MANAGE_MEMBERS)
-    if s.get(m.User, body.user_id) is None:
+    member = s.get(m.User, body.user_id)
+    if member is None:
         raise HTTPException(404, "user not found")
+    before = user_svc.project_role(s, project_id, body.user_id)
     mem = _guard(user_svc.set_member, s, project_id, body.user_id, body.role, user.email)
+    if before != mem.role and member.id != user.id:
+        from ..services import notify
+
+        notify.project_added(s, member, s.get(m.Project, project_id), mem.role, user.email)
     return {"user_id": str(mem.user_id), "role": mem.role}
 
 
@@ -783,6 +919,9 @@ def approve(project_id: uuid.UUID, version_id: uuid.UUID, user: CurrentUser, s: 
     project_access(s, user, project_id, Perm.APPROVE_ESTIMATE)
     _version(s, project_id, version_id)
     v = _guard(est.approve, s, version_id, user.email)
+    from ..services import notify
+
+    notify.estimate_approved(s, v, user.email)
     return {"version_id": str(v.id), "status": v.status, "total_amount": str(v.total_amount), "approved_by": v.approved_by}
 
 

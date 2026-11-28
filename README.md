@@ -8,7 +8,8 @@ Phases 1–2 deliver the engine and its foundations; phase 3 connects all 19
 modules and adds sign-in with role permissions; phase 4 adds Excel/PDF export
 and the editing screens; phase 5 adds drawing and BIM quantity import; phase 6
 adds WBS editing, account security, single sign-on and background jobs; phase 7
-reads DWG and Revit files directly and adds on-screen PDF takeoff. See
+reads DWG and Revit files directly and adds on-screen PDF takeoff; phase 8 adds
+outgoing email and SAML single sign-on. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and for what is
 not built yet.
 
@@ -54,12 +55,16 @@ not built yet.
   drawing's lines. Marks go to an estimate through the same rules and review.
 - Building / floor / zone / room editor on the project page. Renaming never changes
   an amount, and a node still used by estimate items or child nodes cannot be deleted.
-- Accounts: change password, administrator-issued one-time reset links (CEP sends no
-  email; the administrator passes the link on), lockout after 5 failed sign-ins,
-  deactivation, and a user admin page.
-- Single sign-on with any OpenID Connect provider (Entra ID, Google, Okta, Keycloak…),
-  off until configured. It has been tested against a simulated provider, not yet against
-  your own.
+- Accounts: change password, one-time reset links (emailed when email is set up, or
+  handed over by an administrator), "Forgot your password?" by email, lockout after 5
+  failed sign-ins, deactivation, and a user admin page.
+- Outgoing email over SMTP, off until configured: reset links and notices for password
+  changes, lockouts, project membership and estimate approvals, through an outbox with
+  retries that administrators can see. Tested against a local SMTP server, not yet
+  against your mail provider.
+- Single sign-on with any OpenID Connect provider (Entra ID, Google, Okta, Keycloak…)
+  or SAML 2.0 identity provider (ADFS, Okta, Entra ID, Shibboleth…), each off until
+  configured. Both have been tested against simulated providers, not yet against your own.
 - Background jobs (Celery + Redis) for exports and large imports. Without Redis, jobs run
   inside the request instead.
 
