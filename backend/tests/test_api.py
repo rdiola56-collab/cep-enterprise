@@ -170,7 +170,7 @@ def test_drawing_import_over_http(client):
     from . import import_samples as smp
 
     h, view = auth(client, "est@cep.test"), auth(client, "view@cep.test")
-    assert client.get("/api/import/adapters", headers=h).json()["rvt"]["status"].startswith("not built")
+    assert client.get("/api/import/adapters", headers=h).json()["rvt"]["status"].startswith("needs setup")
     pid = client.post("/api/projects", json={"code": "I", "name": "Import", "currency": "PHP"}, headers=h).json()["id"]
     v = client.post(f"/api/projects/{pid}/estimates", headers=h,
                     json={"code": "E", "name": "E", "pricing_date": "2026-11-01"}).json()["version_id"]

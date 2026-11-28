@@ -7,7 +7,8 @@ shared by all 19 estimating modules.
 Phases 1–2 deliver the engine and its foundations; phase 3 connects all 19
 modules and adds sign-in with role permissions; phase 4 adds Excel/PDF export
 and the editing screens; phase 5 adds drawing and BIM quantity import; phase 6
-adds WBS editing, account security, single sign-on and background jobs. See
+adds WBS editing, account security, single sign-on and background jobs; phase 7
+reads DWG and Revit files directly and adds on-screen PDF takeoff. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and for what is
 not built yet.
 
@@ -41,12 +42,16 @@ not built yet.
   By floor, with live SUM formulas) and PDF export (executive summary, trade
   analysis, BOQ), both built from the same report data and logged per export.
   Draft estimates are labelled DRAFT.
-- Drawing and BIM quantity import: takeoff CSV (Bluebeam Markups Summary), DXF
-  drawings and IFC models. Project mapping rules turn markups, layers or model
+- Drawing and BIM quantity import: takeoff CSV (Bluebeam Markups Summary), DXF and
+  DWG drawings (DWG read by LibreDWG), IFC models and Revit models (exported to IFC by
+  your Autodesk Platform Services app; off until configured). Project mapping rules turn markups, layers or model
   elements into item types; every quantity is then priced through the engine like a
   manual entry. Rows are reviewed before import, re-importing a revised file updates
   the same items, and each item traces back to its markup or model element.
   Sample files are in `samples/`.
+- On-screen PDF takeoff: upload a PDF drawing set, set each page's scale (stated, or
+  from a known dimension), and measure lengths, areas and counts with snapping to the
+  drawing's lines. Marks go to an estimate through the same rules and review.
 - Building / floor / zone / room editor on the project page. Renaming never changes
   an amount, and a node still used by estimate items or child nodes cannot be deleted.
 - Accounts: change password, administrator-issued one-time reset links (CEP sends no

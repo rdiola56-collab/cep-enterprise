@@ -1,0 +1,14 @@
+{
+  "name": "cep-dwg-reader",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Converts DWG drawings to DXF for the CEP importer. Runs as a separate program.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@mlightcad/libredwg-web": "0.9.4"
+  },
+  "devDependencies": {
+    "@node-projects/acad-ts": "3.10.0"
+  }
+}

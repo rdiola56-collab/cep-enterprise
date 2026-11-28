@@ -10,7 +10,7 @@ Each supported entity becomes one row, keyed by its DXF handle:
 The drawing unit comes from $INSUNITS. A unitless drawing is refused unless
 the user states its unit: the importer never guesses a scale. Other entity
 types (text, dimensions, hatches…) are counted and reported, not silently lost.
-DWG files must first be saved as DXF; there is no DWG reader.
+DWG files are read by the DWG adapter, which converts them to DXF and calls this one.
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def parse(content: bytes, options: dict | None = None) -> ParsedSource:
         try:
             doc = ezdxf.readfile(tmp)
         except (OSError, ezdxf.DXFError) as exc:
-            raise SourceError(f"not a readable DXF file ({exc}); save DWG drawings as DXF first") from exc
+            raise SourceError(f"not a readable DXF file ({exc})") from exc
     finally:
         os.unlink(tmp)
 
