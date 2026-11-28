@@ -30,7 +30,7 @@ from ..db import models as m
 from ..engine.formula.library import MEASURED_FORMULA_FOR_KIND
 from ..engine.service import EstimatingEngine
 from ..engine.units import convert, get_unit
-from ..integrations import ADAPTERS, SourceError
+from ..integrations import ADAPTERS, RULE_ADAPTER, SourceError, rule_adapter
 from ..modules.registry import get_module
 from . import estimates as est
 from .audit import audit
@@ -52,8 +52,11 @@ RULE_FIELDS = ("code", "adapter", "match_group", "match_label", "match_propertie
 
 def validate_rule(s: Session, project_id: uuid.UUID, data: dict) -> list[str]:
     errors = []
-    if data.get("adapter") not in ADAPTERS:
-        errors.append(f"adapter must be one of {', '.join(ADAPTERS)}")
+    if data.get("adapter") in RULE_ADAPTER:
+        errors.append(f"{data['adapter']} files use the {RULE_ADAPTER[data['adapter']]} rules: make the rule for "
+                      f"{RULE_ADAPTER[data['adapter']]}")
+    elif data.get("adapter") not in ADAPTERS:
+        errors.append(f"adapter must be one of {', '.join(a for a in ADAPTERS if a not in RULE_ADAPTER)}")
     if not data.get("code") or not re.fullmatch(r"[A-Za-z0-9_.-]{1,60}", data["code"]):
         errors.append("code: 1-60 letters, digits, '_', '.', '-'")
     if not data.get("match_group"):
@@ -176,7 +179,7 @@ def stage(s: Session, version_id: uuid.UUID, *, adapter: str, file_name: str, co
                           measures={k: x.to_dict() for k, x in r.measures.items()}, properties=r.properties,
                           status="invalid" if r.messages else "unmapped", read_errors=list(r.messages),
                           messages=list(r.messages))
-        if adapter == "ifc":
+        if rule_adapter(adapter) == "ifc":
             row.bim_element_id = _bim_element(s, batch, r).id
         else:
             ref = m.DrawingReference(project_id=v.project_id, drawing_name=batch.source_name, revision=batch.source_revision,
@@ -232,12 +235,12 @@ def apply_rules(s: Session, batch_id: uuid.UUID) -> m.ImportBatch:
     if batch.status != "staged":
         raise ImportBlocked(f"batch is {batch.status}")
     v = s.get(m.EstimateVersion, batch.estimate_version_id)
-    active = rules(s, batch.project_id, batch.adapter)
+    active = rules(s, batch.project_id, rule_adapter(batch.adapter))
     floors = _floors(s, batch.project_id, batch.options.get("building_id"))
     formulas = SqlFormulaResolver(s, batch.project_id)
     engine = EstimatingEngine(formulas=formulas, assemblies=SqlAssemblyResolver(s, batch.project_id),
                               rates=SqlRateBook(s, batch.project_id))
-    prefix = f"{batch.adapter}:{_slug(batch.source_name, 40)}"
+    prefix = f"{rule_adapter(batch.adapter)}:{_slug(batch.source_name, 40)}"
     rows = list(s.scalars(select(m.ImportRow).where(m.ImportRow.batch_id == batch.id).order_by(m.ImportRow.row_no)))
 
     groups: dict[str, list[tuple[m.ImportRow, m.ImportMappingRule, dict]]] = defaultdict(list)

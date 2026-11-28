@@ -141,3 +141,25 @@ export async function waitForJob(pid: string, job: Job, onUpdate?: (j: Job) => v
   }
   return current;
 }
+
+/** An authenticated file (e.g. a rendered drawing page) as an object URL for <img>. Revoke it when done. */
+export async function blobUrl(path: string): Promise<string> {
+  const token = getToken();
+  const res = await fetch(`/api${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) throw new ApiError(`Could not load ${path} (${res.status})`, res.status);
+  return URL.createObjectURL(await res.blob());
+}
+
+export type Measure = { value: string; unit: string };
+export type SheetPage = {
+  page_no: number; width_pt: string; height_pt: string; rotation: number; label: string;
+  scale: { unit: string; units_per_point: string; method: "stated" | "measured"; note: string; set_by: string; set_at: string } | null;
+};
+export type TakeoffMark = {
+  id: string; ref: string; page_no: number; kind: "length" | "area" | "count"; subject: string; label: string;
+  points: [string, string][]; measures: Record<string, Measure>; problems: string[]; created_by: string;
+};
+export type Sheet = {
+  id: string; set_name: string; revision: string; file_name: string; file_sha256: string; page_count: number;
+  created_by: string; created_at: string; marks: number | TakeoffMark[]; pages?: SheetPage[];
+};

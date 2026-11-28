@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from .. import jobs
 from ..auth.permissions import Perm
 from ..db import models as m
-from ..integrations import ADAPTER_INFO, SourceError
+from ..integrations import ADAPTERS, BACKGROUND_ONLY, SourceError, adapter_info
 from ..services import imports as imp
 from .deps import DB, CurrentUser, project_access
 from .routes import _guard, _version, jsonable
@@ -22,7 +22,7 @@ MAX_UPLOAD = 200 * 1024 * 1024  # bytes
 
 @router.get("/import/adapters")
 def adapters(user: CurrentUser):
-    return ADAPTER_INFO
+    return adapter_info()
 
 
 class RuleIn(BaseModel):
@@ -86,7 +86,11 @@ async def stage_import(project_id: uuid.UUID, version_id: uuid.UUID, user: Curre
     if len(content) > MAX_UPLOAD:
         raise HTTPException(413, "file is larger than 200 MB")
     options = {k: v for k, v in {"level": level, "drawing_unit": drawing_unit, "default_unit": default_unit}.items() if v}
-    if background:
+    if adapter == "pdf_takeoff":
+        raise HTTPException(422, "PDF drawings are measured on screen: upload them under Drawings")
+    if adapter not in ADAPTERS:
+        raise HTTPException(422, f"no importer for '{adapter}'")
+    if background or adapter in BACKGROUND_ONLY:
         job = jobs.create(s, project_id, "import_stage", {
             "version_id": str(version_id), "adapter": adapter, "file_name": file.filename or "upload",
             "source_name": source_name, "source_revision": source_revision, "options": options,

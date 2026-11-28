@@ -6,7 +6,7 @@ import { api, money, qty, upload, waitForJob, type Job, type ModuleInfo, type Wb
 
 const BACKGROUND_ABOVE = 5 * 1024 * 1024; // larger files are read by the background worker
 
-type Adapter = { label: string; extensions: string[]; status: string };
+type Adapter = { label: string; extensions: string[]; status: string; upload: boolean; rules?: string; background?: boolean; note?: string };
 type Rule = {
   id: string; code: string; adapter: string; match_group: string; match_label: string | null;
   match_properties: Record<string, string>; module: string; item_type: string; assembly_code: string | null;
@@ -61,6 +61,8 @@ export default function ImportPage({ params }: { params: Promise<{ pid: string; 
     api<WbsBuilding[]>(`/projects/${pid}/wbs`).then(setWbs).catch(() => undefined);
     loadRules();
     loadBatches();
+    const batch = new URLSearchParams(window.location.search).get("batch");  // sent here from the PDF drawing screen
+    if (batch) api<Batch>(`/projects/${pid}/imports/${batch}`).then(setOpen).catch((e) => setError(e.message));
   }, [pid, vid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function run<T>(fn: () => Promise<T>): Promise<T | undefined> {
@@ -92,7 +94,8 @@ export default function ImportPage({ params }: { params: Promise<{ pid: string; 
       <UploadForm adapters={adapters} wbs={wbs} busy={busy}
         onUpload={(form) => run(async () => {
           const file = form.get("file") as File;
-          if (file.size <= BACKGROUND_ABOVE) return after(await upload<Batch>(`/projects/${pid}/versions/${vid}/imports`, form));
+          const always = adapters[String(form.get("adapter"))]?.background;
+          if (file.size <= BACKGROUND_ABOVE && !always) return after(await upload<Batch>(`/projects/${pid}/versions/${vid}/imports`, form));
           form.append("background", "true");
           const job = await waitForJob(pid, await upload<Job>(`/projects/${pid}/versions/${vid}/imports`, form));
           if (job.status !== "succeeded") throw new Error(job.error ?? "import failed");
@@ -153,7 +156,7 @@ function UploadForm({ adapters, wbs, busy, onUpload }: {
     <form onSubmit={submit} className="panel flex flex-wrap items-end gap-3 p-4 text-sm">
       <label className="flex flex-col"><span className="muted text-xs">Source type</span>
         <select className="field" value={adapter} onChange={(e) => setAdapter(e.target.value)}>
-          {Object.entries(adapters).map(([k, a]) => (
+          {Object.entries(adapters).filter(([, a]) => a.upload).map(([k, a]) => (
             <option key={k} value={k} disabled={a.status !== "operational"}>{a.label}{a.status !== "operational" ? ` (${a.status})` : ""}</option>
           ))}
         </select>
@@ -169,7 +172,7 @@ function UploadForm({ adapters, wbs, busy, onUpload }: {
         <select className="field" value={vals.building_id} onChange={set("building_id")}>
           <option value="">(any)</option>{wbs.map((b) => <option key={b.id} value={b.id}>{b.code} {b.name}</option>)}
         </select></label>
-      {adapter === "dxf" && <>
+      {(adapter === "dxf" || adapter === "dwg") && <>
         <label className="flex flex-col"><span className="muted text-xs">Floor of this plan</span>
           <select className="field" value={vals.level} onChange={set("level")}>
             <option value="">(none)</option>{floors.map((f) => <option key={f.id} value={f.code}>{f.building} {f.code} {f.name}</option>)}
@@ -182,6 +185,11 @@ function UploadForm({ adapters, wbs, busy, onUpload }: {
           <input className="field w-24" value={vals.default_unit} onChange={set("default_unit")} placeholder="(refuse)" /></label>
       )}
       <button className="btn" disabled={busy || !file}>{busy ? "Reading…" : "Read file"}</button>
+      <div className="muted w-full text-xs">
+        {adapters[adapter]?.rules && <>Uses the {adapters[adapter].rules?.toUpperCase()} mapping rules. </>}
+        {adapter === "rvt" && <>The model is sent to your Autodesk Platform Services account, exported to IFC by Revit there, and read back; this takes a few minutes. </>}
+        PDF drawings are measured on screen: open the project&apos;s PDF drawings.
+      </div>
     </form>
   );
 }
@@ -320,7 +328,8 @@ function RulesPanel({ pid, rules, modules, adapters, onChange, setError }: {
         {field("code", "Code", "w-28", "TILE-FLR")}
         <label className="flex flex-col"><span className="muted text-xs">Source type</span>
           <select className="field" value={f.adapter} onChange={(e) => setF({ ...f, adapter: e.target.value })}>
-            {Object.entries(adapters).filter(([, a]) => a.status === "operational").map(([k, a]) => <option key={k} value={k}>{a.label}</option>)}
+            {Object.entries(adapters).filter(([, a]) => !a.rules).map(([k, a]) => (
+              <option key={k} value={k}>{a.label}{Object.values(adapters).filter((x) => x.rules === k).map((x) => ` + ${x.label.split(" (")[0]}`).join("")}</option>))}
           </select></label>
         {field("match_group", "Subject / layer / IFC class", "w-44", "IfcBeam or A-FLOR-*")}
         {field("match_label", "Label / block / type (optional)", "w-44")}

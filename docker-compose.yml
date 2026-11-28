@@ -26,6 +26,10 @@ services:
       CEP_OIDC_CLIENT_ID: ${CEP_OIDC_CLIENT_ID:-}
       CEP_OIDC_CLIENT_SECRET: ${CEP_OIDC_CLIENT_SECRET:-}
       CEP_OIDC_REDIRECT_URI: ${CEP_OIDC_REDIRECT_URI:-}
+      # Revit import (optional): an Autodesk Platform Services app. See docs/ARCHITECTURE.md.
+      CEP_APS_CLIENT_ID: ${CEP_APS_CLIENT_ID:-}
+      CEP_APS_CLIENT_SECRET: ${CEP_APS_CLIENT_SECRET:-}
+      CEP_APS_REGION: ${CEP_APS_REGION:-US}
     ports: ["8000:8000"]
     depends_on:
       db: { condition: service_healthy }
@@ -37,6 +41,10 @@ services:
       CEP_DATABASE_URL: postgresql+psycopg://cep:cep@db:5432/cep
       CEP_SECRET_KEY: ${CEP_SECRET_KEY:?set CEP_SECRET_KEY to a long random value}
       CEP_REDIS_URL: redis://redis:6379/0
+      # Revit import (optional): an Autodesk Platform Services app. See docs/ARCHITECTURE.md.
+      CEP_APS_CLIENT_ID: ${CEP_APS_CLIENT_ID:-}
+      CEP_APS_CLIENT_SECRET: ${CEP_APS_CLIENT_SECRET:-}
+      CEP_APS_REGION: ${CEP_APS_REGION:-US}
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_started }

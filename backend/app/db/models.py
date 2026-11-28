@@ -582,6 +582,72 @@ class Job(Base):
     __table_args__ = (CheckConstraint("status in ('queued','running','succeeded','failed')", name="ck_job_status"),)
 
 
+class DrawingSheet(Base):
+    """A PDF drawing set uploaded for on-screen takeoff. The file is kept as uploaded."""
+
+    __tablename__ = "drawing_sheets"
+    id: Mapped[uuid.UUID] = pk()
+    project_id: Mapped[uuid.UUID] = project_fk(False)
+    set_name: Mapped[str] = mapped_column(String(200))  # drawing set: the item-key namespace when sent to an estimate
+    revision: Mapped[str] = mapped_column(String(40))
+    file_name: Mapped[str] = mapped_column(String(255))
+    file_sha256: Mapped[str] = mapped_column(String(64))
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    page_count: Mapped[int] = mapped_column(Integer)
+    created_by: Mapped[str] = mapped_column(String(254))
+    created_at: Mapped[datetime] = created()
+    __table_args__ = (UniqueConstraint("id", "project_id"),)
+
+
+class TakeoffPage(Base):
+    """One page of a sheet: its size, its label (matched to a WBS floor) and its scale.
+    A page without a scale cannot be measured: quantities are never guessed."""
+
+    __tablename__ = "takeoff_pages"
+    id: Mapped[uuid.UUID] = pk()
+    project_id: Mapped[uuid.UUID] = project_fk(False)
+    sheet_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    page_no: Mapped[int] = mapped_column(Integer)  # 1-based
+    width_pt: Mapped[Decimal] = mapped_column(Numeric(12, 3))  # as displayed (after the page's own rotation)
+    height_pt: Mapped[Decimal] = mapped_column(Numeric(12, 3))
+    rotation: Mapped[int] = mapped_column(Integer, default=0)
+    label: Mapped[str] = mapped_column(String(120), default="")
+    scale_unit: Mapped[str | None] = mapped_column(String(20))  # length unit the scale gives
+    units_per_point: Mapped[str | None] = mapped_column(String(80))  # exact decimal: real length per PDF point
+    scale_method: Mapped[str | None] = mapped_column(String(20))  # stated | measured
+    scale_note: Mapped[str | None] = mapped_column(String(200))  # e.g. 1/4" = 1'-0", or the known dimension used
+    scaled_by: Mapped[str | None] = mapped_column(String(254))
+    scaled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        ForeignKeyConstraint(["sheet_id", "project_id"], ["drawing_sheets.id", "drawing_sheets.project_id"], ondelete="CASCADE"),
+        UniqueConstraint("sheet_id", "page_no", name="uq_takeoff_page"),
+        CheckConstraint("scale_method is null or scale_method in ('stated','measured')", name="ck_takeoff_scale_method"),
+    )
+
+
+class TakeoffMark(Base):
+    """A measurement drawn on a page: a polyline (length), a polygon (area) or count points.
+    Points are PDF points from the page's top-left corner, as displayed."""
+
+    __tablename__ = "takeoff_marks"
+    id: Mapped[uuid.UUID] = pk()
+    project_id: Mapped[uuid.UUID] = project_fk(False)
+    sheet_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    page_no: Mapped[int] = mapped_column(Integer)
+    ref: Mapped[int] = mapped_column(Integer)  # M1, M2… per sheet; never reused, so item keys stay stable
+    kind: Mapped[str] = mapped_column(String(10))  # length | area | count
+    subject: Mapped[str] = mapped_column(String(200))  # what mapping rules match (like a Bluebeam subject)
+    label: Mapped[str] = mapped_column(String(300), default="")
+    points: Mapped[list] = mapped_column(JSONB)  # [["x", "y"], …] as decimal strings
+    created_by: Mapped[str] = mapped_column(String(254))
+    created_at: Mapped[datetime] = created()
+    __table_args__ = (
+        ForeignKeyConstraint(["sheet_id", "project_id"], ["drawing_sheets.id", "drawing_sheets.project_id"], ondelete="CASCADE"),
+        UniqueConstraint("sheet_id", "ref", name="uq_takeoff_mark_ref"),
+        CheckConstraint("kind in ('length','area','count')", name="ck_takeoff_mark_kind"),
+    )
+
+
 class ProjectMember(Base):
     __tablename__ = "project_members"
     id: Mapped[uuid.UUID] = pk()
@@ -634,7 +700,7 @@ class ImportMappingRule(Base):
     id: Mapped[uuid.UUID] = pk()
     project_id: Mapped[uuid.UUID] = project_fk(False)
     code: Mapped[str] = mapped_column(String(60))
-    adapter: Mapped[str] = mapped_column(String(30))  # takeoff_csv | dxf | ifc
+    adapter: Mapped[str] = mapped_column(String(30))  # takeoff_csv | dxf (also DWG) | ifc (also Revit) | pdf_takeoff
     match_group: Mapped[str] = mapped_column(String(200))  # glob on subject / layer / IFC class
     match_label: Mapped[str | None] = mapped_column(String(200))  # optional glob on label / block / type name
     match_properties: Mapped[dict] = mapped_column(JSONB, default=dict)  # exact property values
@@ -651,7 +717,7 @@ class ImportMappingRule(Base):
     created_at: Mapped[datetime] = created()
     __table_args__ = (
         UniqueConstraint("project_id", "code", name="uq_import_rule_code"),
-        CheckConstraint("adapter in ('takeoff_csv','dxf','ifc')", name="ck_import_rule_adapter"),
+        CheckConstraint("adapter in ('takeoff_csv','dxf','ifc','pdf_takeoff')", name="ck_import_rule_adapter"),
         CheckConstraint("quantity_basis in ('formula','measured')", name="ck_import_rule_basis"),
         CheckConstraint("NOT aggregate OR quantity_basis = 'measured'", name="ck_import_rule_aggregate_measured"),
     )

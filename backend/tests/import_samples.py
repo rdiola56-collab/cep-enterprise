@@ -1,4 +1,4 @@
-"""Small, real source files built in code: a takeoff CSV, a DXF drawing and an IFC model."""
+"""Small, real source files built in code: a takeoff CSV, DXF and DWG drawings, an IFC model and a PDF plan."""
 from __future__ import annotations
 
 import io
@@ -75,3 +75,49 @@ def ifc(elements: list[dict], length_unit: str = "mm") -> bytes:
             return fh.read()
     finally:
         os.unlink(path)
+
+
+def dwg(dxf_bytes: bytes, version: str = "AC1018") -> bytes:
+    """The same drawing written as DWG by an independent library (acad-ts, a port of ACadSharp), so the
+    DWG reader (LibreDWG) is tested on DWG bytes it did not write itself."""
+    import pathlib
+    import shutil
+    import subprocess
+
+    tool = pathlib.Path(__file__).resolve().parents[1] / "tools" / "dwg" / "make_sample.mjs"
+    with tempfile.TemporaryDirectory() as d:
+        src, out = os.path.join(d, "in.dxf"), os.path.join(d, "out.dwg")
+        with open(src, "wb") as fh:
+            fh.write(dxf_bytes)
+        subprocess.run([shutil.which("node") or "node", str(tool), src, out, version], check=True, capture_output=True,
+                       timeout=120)
+        with open(out, "rb") as fh:
+            return fh.read()
+
+
+def pdf_plan(pages: list[dict]) -> bytes:
+    """A vector PDF. pages: {"size": (w, h) in points, "lines": [((x1, y1), (x2, y2))] from the TOP-LEFT corner,
+    "rotate": 0|90|180|270 (the page's /Rotate, as a CAD plot of a landscape sheet on portrait paper has)}."""
+    from pypdf import PdfReader, PdfWriter
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf)
+    for p in pages:
+        w, h = p.get("size", (1224, 792))
+        c.setPageSize((w, h))
+        c.setLineWidth(1)
+        for (x1, y1), (x2, y2) in p.get("lines", []):
+            c.line(x1, h - y1, x2, h - y2)
+        c.setFont("Helvetica", 10)
+        c.drawString(36, 36, p.get("title", "PLAN  SCALE 1/4\" = 1'-0\""))
+        c.showPage()
+    c.save()
+    reader, writer = PdfReader(io.BytesIO(buf.getvalue())), PdfWriter()
+    for page, spec in zip(reader.pages, pages):
+        if spec.get("rotate"):
+            page.rotate(spec["rotate"])
+        writer.add_page(page)
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()

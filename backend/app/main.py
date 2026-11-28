@@ -4,6 +4,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .api.drawing_routes import router as drawing_router
 from .api.import_routes import router as import_router
 from .api.routes import router
 
@@ -16,3 +17,4 @@ app.add_middleware(
 )
 app.include_router(router, prefix="/api")
 app.include_router(import_router, prefix="/api")
+app.include_router(drawing_router, prefix="/api")

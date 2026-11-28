@@ -36,7 +36,10 @@ export default function ProjectPage({ params }: { params: Promise<{ pid: string 
 
   return (
     <div className="max-w-5xl space-y-4">
-      <h1 className="text-xl font-semibold">Estimates</h1>
+      <div className="flex items-center">
+        <h1 className="mr-auto text-xl font-semibold">Estimates</h1>
+        <Link className="panel px-3 py-1 text-sm" href={`/projects/${pid}/drawings`}>PDF drawings (on-screen takeoff)</Link>
+      </div>
       <section className="panel">
         <table className="datagrid">
           <thead><tr><th>Estimate</th><th>Version</th><th>Status</th><th>Pricing date</th><th className="num">Total</th><th>Approved by</th></tr></thead>

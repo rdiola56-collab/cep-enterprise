@@ -1,0 +1,5 @@
+tools/dwg/node_modules
+__pycache__
+.pytest_cache
+.ruff_cache
+*.egg-info

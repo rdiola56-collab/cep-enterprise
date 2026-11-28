@@ -15,7 +15,7 @@ network calls. There are no microservices at this stage.
 | 5 | Construction assembly | `app/engine/assembly.py`, `services/library.py` | Built and tested |
 | 6 | Cost calculation | `app/engine/costing.py`, `app/engine/rates.py` | Built and tested |
 | 7 | Database and data access | `app/db/`, `services/ratebook.py`, `migrations/` | Built and tested |
-| 8 | Drawing and BIM integration | `app/integrations/`, `services/imports.py` | Takeoff CSV, DXF and IFC built and tested; DWG, RVT and PDF not built (see below) |
+| 8 | Drawing and BIM integration | `app/integrations/`, `services/imports.py` | Takeoff CSV, DXF, DWG, IFC, Revit (via APS) and on-screen PDF takeoff built and tested |
 | 9 | Reporting and export | `services/estimates.py`, `services/reports.py` | BOQ, summaries, Excel (openpyxl) and PDF (ReportLab) export built and tested |
 
 ## The one calculation path
@@ -70,6 +70,35 @@ file ──adapter──▶ staged rows: what was measured, with units, where (p
   and properties, plus its storey. Model units are converted to SI exactly for SI
   and the standard imperial units. Quantities are never derived from geometry: an
   element without quantity sets has only a count.
+- **DWG** (`integrations/dwg.py`) is read directly: a separate reader program,
+  GNU LibreDWG compiled to WebAssembly (`backend/tools/dwg/dwg2dxf.mjs`, run with
+  Node.js), converts it to DXF and the DXF adapter measures that. So a DWG and a DXF
+  of the same drawing give identical rows, entity handles and units, and share the
+  DXF mapping rules and item keys. Tests write DWG files (R2000 to R2018) with an
+  independent library (acad-ts, a port of ACadSharp) and check they read back
+  exactly as the DXF. Drawings from before R13 are refused. LibreDWG is GPL-3.0 and
+  runs as its own process; `CEP_DWG_CONVERTER` can name another converter (for
+  example ODA File Converter behind a wrapper) that reads DWG on stdin and writes DXF.
+  If no reader is installed, the importer says so and refuses DWG files.
+- **Revit** (`integrations/rvt.py`): the .rvt format can only be read by Autodesk
+  software, so CEP uploads the model to the company's own Autodesk Platform
+  Services app (a transient bucket, deleted by APS after 24 hours), has the Model
+  Derivative service export it to IFC with Revit's own exporter, downloads the IFC
+  and measures it with the IFC adapter. Revit imports share the IFC rules and item
+  keys and always run as background jobs. It is off until `CEP_APS_CLIENT_ID` and
+  `CEP_APS_CLIENT_SECRET` are set (optional: `CEP_APS_REGION`, `CEP_APS_BUCKET`,
+  `CEP_APS_IFC_SETTING`, `CEP_APS_TIMEOUT`). It is tested against a simulated APS,
+  not yet against a real APS account.
+- **PDF drawings** (`services/takeoff.py`, `integrations/pdf_takeoff.py`) are
+  measured on screen. The PDF is kept as uploaded; pages are rendered by PDFium and
+  the page's vector line work (read with pdfplumber) is offered for snapping. Each
+  page needs a scale before lengths or areas count: a stated drawing scale
+  (1/4" = 1'-0", 1:100…) or a known dimension picked on the page. Points are stored
+  in PDF points and every quantity is recomputed in decimal from them and the
+  scale, so changing a scale updates every mark on that page. Marks (length, area
+  with perimeter, count) have a subject that mapping rules match and a stable
+  reference (M1, M2…), and are sent to a draft estimate through the same review and
+  commit as an imported file. The page label is matched to a WBS floor.
 - **Mapping rules** (`import_mapping_rules`) are project configuration. A rule
   matches on a glob for subject, layer or IFC class, plus an optional label and
   property values. It names the module and item type, and says which measured
@@ -205,8 +234,8 @@ clear error instead of a made-up figure.
 
 ## Not built yet (and not presented as working)
 
-- Native DWG and Revit (.rvt) files, and measuring directly on PDF drawings.
-  Save DWG as DXF, export IFC from Revit, and measure PDFs in Bluebeam and import
-  the Markups Summary CSV. The importer lists these as "not built".
+- Revit import has not been run against a real Autodesk Platform Services
+  account yet; it shows "needs setup" until credentials are configured.
+- Raster (scanned) PDFs can be measured on screen, but offer no line work to snap to.
 - Outgoing email (reset links are handed over by an administrator).
 - SAML single sign-on (OpenID Connect only).
