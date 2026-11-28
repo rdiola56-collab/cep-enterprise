@@ -90,6 +90,9 @@ running total; total 62,584.43, unit rate 625.84 per m².
 
 ## Run it
 
+To run CEP on your own server with HTTPS, follow [docs/DEPLOY.md](docs/DEPLOY.md)
+(`docker-compose.prod.yml`, settings in `.env`). The steps below are for trying it locally.
+
 ### Docker (any OS)
 
 ```bash

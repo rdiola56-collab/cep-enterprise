@@ -1,0 +1,85 @@
+# CEP on your own server. Copy .env.example to .env, fill it in, then:
+#   docker compose -f docker-compose.prod.yml up -d --build
+# Only Caddy (ports 80/443) is reachable from outside; the database, Redis and the
+# API stay on the internal network. See docs/DEPLOY.md.
+x-backend-env: &backend-env
+  CEP_DATABASE_URL: postgresql+psycopg://cep:${CEP_DB_PASSWORD:?set CEP_DB_PASSWORD in .env}@db:5432/cep
+  CEP_SECRET_KEY: ${CEP_SECRET_KEY:?set CEP_SECRET_KEY in .env}
+  CEP_REDIS_URL: redis://redis:6379/0
+  CEP_APP_URL: ${CEP_APP_URL:?set CEP_APP_URL in .env}
+  CEP_CORS_ORIGINS: ${CEP_APP_URL}
+  # Outgoing email (optional)
+  CEP_SMTP_HOST: ${CEP_SMTP_HOST:-}
+  CEP_SMTP_PORT: ${CEP_SMTP_PORT:-587}
+  CEP_SMTP_SECURITY: ${CEP_SMTP_SECURITY:-starttls}
+  CEP_SMTP_USER: ${CEP_SMTP_USER:-}
+  CEP_SMTP_PASSWORD: ${CEP_SMTP_PASSWORD:-}
+  CEP_MAIL_FROM: ${CEP_MAIL_FROM:-}
+  # SAML single sign-on (optional)
+  CEP_SAML_IDP_METADATA_URL: ${CEP_SAML_IDP_METADATA_URL:-}
+  CEP_SAML_SP_BASE_URL: ${CEP_SAML_SP_BASE_URL:-}
+  CEP_SAML_LABEL: ${CEP_SAML_LABEL:-Sign in with SAML}
+  CEP_SAML_EMAIL_ATTRIBUTE: ${CEP_SAML_EMAIL_ATTRIBUTE:-}
+  CEP_SAML_AUTO_CREATE: ${CEP_SAML_AUTO_CREATE:-}
+  # OpenID Connect single sign-on (optional)
+  CEP_OIDC_ISSUER: ${CEP_OIDC_ISSUER:-}
+  CEP_OIDC_CLIENT_ID: ${CEP_OIDC_CLIENT_ID:-}
+  CEP_OIDC_CLIENT_SECRET: ${CEP_OIDC_CLIENT_SECRET:-}
+  CEP_OIDC_REDIRECT_URI: ${CEP_OIDC_REDIRECT_URI:-}
+  # Revit import through Autodesk Platform Services (optional)
+  CEP_APS_CLIENT_ID: ${CEP_APS_CLIENT_ID:-}
+  CEP_APS_CLIENT_SECRET: ${CEP_APS_CLIENT_SECRET:-}
+  CEP_APS_REGION: ${CEP_APS_REGION:-US}
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cep
+      POSTGRES_PASSWORD: ${CEP_DB_PASSWORD:?set CEP_DB_PASSWORD in .env}
+      POSTGRES_DB: cep
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cep"]
+      interval: 5s
+      retries: 20
+  redis:
+    image: redis:7
+    restart: unless-stopped
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment: *backend-env
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    command: celery -A app.jobs worker --loglevel=info --concurrency=2
+    environment: *backend-env
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+  frontend:
+    build:
+      context: ./frontend
+      args: { CEP_API_URL: "http://backend:8000" }
+    restart: unless-stopped
+    depends_on: [backend]
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CEP_SITE_ADDRESS: ${CEP_SITE_ADDRESS:-:80}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [frontend]
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
