@@ -64,7 +64,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
-  const publicCall = ["/auth/login", "/auth/reset", "/auth/sso"].some((p) => path.startsWith(p));
+  const publicCall = ["/auth/login", "/auth/reset", "/auth/sso", "/auth/saml", "/auth/forgot"].some((p) => path.startsWith(p));
   if (res.status === 401 && !publicCall) {
     setToken(null);
     if (typeof window !== "undefined" && window.location.pathname !== "/login") window.location.href = "/login";
@@ -124,7 +124,7 @@ export async function upload<T>(path: string, form: FormData): Promise<T> {
   return body as T;
 }
 
-export const PUBLIC_PAGES = ["/login", "/login/sso", "/reset-password"];
+export const PUBLIC_PAGES = ["/login", "/login/sso", "/reset-password", "/forgot-password"];
 
 export type Job = { id: string; kind: string; status: "queued" | "running" | "succeeded" | "failed"; error: string | null;
   result: Record<string, unknown> | null; output_name: string | null; mode: string };

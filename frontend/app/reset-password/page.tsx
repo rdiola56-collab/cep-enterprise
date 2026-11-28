@@ -26,7 +26,7 @@ function ResetForm() {
   return (
     <form onSubmit={submit} className="panel w-80 space-y-3 p-6 text-sm">
       <div><div className="font-semibold">CEP: ENTERPRISE</div><div className="muted">Choose a new password</div></div>
-      {!token && <div className="text-red-500">This page needs the link an administrator gave you.</div>}
+      {!token && <div className="text-red-500">This page needs a reset link from your email or from an administrator.</div>}
       <label className="block">New password (at least 10 characters)
         <input className="field mt-1 w-full" type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} required minLength={10} /></label>
       <label className="block">Repeat it

@@ -108,7 +108,8 @@ def _start(client):  # noqa: F811
 
 def test_sso_is_off_until_configured(client, monkeypatch):  # noqa: F811
     monkeypatch.delenv("CEP_OIDC_ISSUER", raising=False)
-    assert client.get("/api/auth/sso").json() == {"enabled": False, "label": None}
+    info = client.get("/api/auth/sso").json()
+    assert info["enabled"] is False and info["label"] is None
     assert client.post("/api/auth/sso/start").status_code == 404
 
 

@@ -30,6 +30,20 @@ services:
       CEP_APS_CLIENT_ID: ${CEP_APS_CLIENT_ID:-}
       CEP_APS_CLIENT_SECRET: ${CEP_APS_CLIENT_SECRET:-}
       CEP_APS_REGION: ${CEP_APS_REGION:-US}
+      # Outgoing email (optional): set host, sender and app URL to switch it on.
+      CEP_SMTP_HOST: ${CEP_SMTP_HOST:-}
+      CEP_SMTP_PORT: ${CEP_SMTP_PORT:-587}
+      CEP_SMTP_SECURITY: ${CEP_SMTP_SECURITY:-starttls}
+      CEP_SMTP_USER: ${CEP_SMTP_USER:-}
+      CEP_SMTP_PASSWORD: ${CEP_SMTP_PASSWORD:-}
+      CEP_MAIL_FROM: ${CEP_MAIL_FROM:-}
+      CEP_APP_URL: ${CEP_APP_URL:-}
+      # SAML single sign-on (optional): IdP metadata and this site's public base URL.
+      CEP_SAML_IDP_METADATA_URL: ${CEP_SAML_IDP_METADATA_URL:-}
+      CEP_SAML_SP_BASE_URL: ${CEP_SAML_SP_BASE_URL:-}
+      CEP_SAML_LABEL: ${CEP_SAML_LABEL:-Sign in with SAML}
+      CEP_SAML_EMAIL_ATTRIBUTE: ${CEP_SAML_EMAIL_ATTRIBUTE:-}
+      CEP_SAML_AUTO_CREATE: ${CEP_SAML_AUTO_CREATE:-}
     ports: ["8000:8000"]
     depends_on:
       db: { condition: service_healthy }
@@ -45,6 +59,14 @@ services:
       CEP_APS_CLIENT_ID: ${CEP_APS_CLIENT_ID:-}
       CEP_APS_CLIENT_SECRET: ${CEP_APS_CLIENT_SECRET:-}
       CEP_APS_REGION: ${CEP_APS_REGION:-US}
+      # Outgoing email (optional): set host, sender and app URL to switch it on.
+      CEP_SMTP_HOST: ${CEP_SMTP_HOST:-}
+      CEP_SMTP_PORT: ${CEP_SMTP_PORT:-587}
+      CEP_SMTP_SECURITY: ${CEP_SMTP_SECURITY:-starttls}
+      CEP_SMTP_USER: ${CEP_SMTP_USER:-}
+      CEP_SMTP_PASSWORD: ${CEP_SMTP_PASSWORD:-}
+      CEP_MAIL_FROM: ${CEP_MAIL_FROM:-}
+      CEP_APP_URL: ${CEP_APP_URL:-}
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_started }

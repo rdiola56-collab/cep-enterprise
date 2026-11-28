@@ -560,6 +560,47 @@ class SsoLoginState(Base):
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class SamlRequest(Base):
+    """An AuthnRequest CEP sent: a SAML response is accepted only in reply to one of these, once."""
+
+    __tablename__ = "saml_requests"
+    id: Mapped[uuid.UUID] = pk()
+    request_id: Mapped[str] = mapped_column(String(100), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class LoginHandoff(Base):
+    """A one-time code handing a finished SAML sign-in from the API's assertion endpoint to the web app."""
+
+    __tablename__ = "login_handoffs"
+    id: Mapped[uuid.UUID] = pk()
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class EmailMessage(Base):
+    """Outgoing email (outbox). Sent by the worker, or in the request when no worker runs."""
+
+    __tablename__ = "email_messages"
+    id: Mapped[uuid.UUID] = pk()
+    kind: Mapped[str] = mapped_column(String(40))  # reset_link | password_changed | account_locked | project_added | ...
+    to_addr: Mapped[str] = mapped_column(String(254))
+    subject: Mapped[str] = mapped_column(String(300))
+    body: Mapped[str] = mapped_column(Text)
+    sensitive: Mapped[bool] = mapped_column(Boolean, default=False)  # holds a secret link: hidden in lists, removed once sent
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    project_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"))
+    status: Mapped[str] = mapped_column(String(20), default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = created()
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (CheckConstraint("status in ('queued','sent','failed')", name="ck_email_status"),)
+
+
 class Job(Base):
     """Background work (large imports, exports). The worker writes status and result; the API only reads."""
 
