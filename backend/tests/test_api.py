@@ -200,3 +200,75 @@ def test_drawing_import_over_http(client):
     assert [(i["item_key"], i["amount"][:8], i["quantity_basis"]) for i in items] == [
         ("takeoff_csv:A-201:A1", "62584.43", "measured")]
     assert len(client.get(f"/api/projects/{pid}/imports", headers=view).json()) == 1
+
+
+def test_wbs_editing_keeps_estimate_locations(client):
+    h, view = auth(client, "est@cep.test"), auth(client, "view@cep.test")
+    pid = client.post("/api/projects", json={"code": "WE", "name": "WBS edit", "currency": "PHP"}, headers=h).json()["id"]
+    b = client.post(f"/api/projects/{pid}/buildings", json={"code": "T1", "name": "Tower 1"}, headers=h).json()["id"]
+    f1, f2 = (client.post(f"/api/projects/{pid}/floors", headers=h, json={"building_id": b, "code": c, "name": c, "level": n}).json()["id"]
+              for n, c in ((1, "L01"), (2, "L02")))
+    z2 = client.post(f"/api/projects/{pid}/zones", json={"floor_id": f2, "code": "Z", "name": "East"}, headers=h).json()["id"]
+    room = client.post(f"/api/projects/{pid}/rooms", json={"floor_id": f1, "code": "R1", "name": "Lobby"}, headers=h).json()["id"]
+    v = client.post(f"/api/projects/{pid}/estimates", headers=h, json={"code": "E", "name": "E", "pricing_date": "2026-11-01"}).json()["version_id"]
+    assert client.post(f"/api/projects/{pid}/versions/{v}/items", headers=h,
+                       json={**TILE, "building_id": b, "floor_id": f1}).status_code == 200
+    amount = client.get(f"/api/projects/{pid}/versions/{v}/items", headers=h).json()[0]["amount"]
+
+    tree = client.patch(f"/api/projects/{pid}/wbs/floors/{f1}", headers=h,
+                        json={"name": "Ground floor", "gross_floor_area_m2": "850"}).json()
+    floor = tree[0]["floors"][0]
+    assert floor["name"] == "Ground floor" and floor["gross_floor_area_m2"] == "850"
+    by_floor = client.get(f"/api/projects/{pid}/versions/{v}/consolidate", params={"by": "floor"}, headers=h).json()
+    assert by_floor[0]["floor"] == "L01"
+    assert client.get(f"/api/projects/{pid}/versions/{v}/items", headers=h).json()[0]["amount"] == amount  # unchanged
+
+    assert client.patch(f"/api/projects/{pid}/wbs/rooms/{room}", headers=h, json={"zone_id": z2}).status_code == 422  # other floor
+    assert client.patch(f"/api/projects/{pid}/wbs/floors/{f1}", headers=h, json={"code": ""}).status_code == 422
+    assert client.patch(f"/api/projects/{pid}/wbs/floors/{f1}", headers=view, json={"name": "x"}).status_code in (403, 404)
+    r = client.delete(f"/api/projects/{pid}/wbs/floors/{f1}", headers=h)
+    assert r.status_code == 409 and "1 estimate item" in r.json()["detail"] and "1 room" in r.json()["detail"]
+    assert client.delete(f"/api/projects/{pid}/wbs/buildings/{b}", headers=h).status_code == 409
+    assert client.delete(f"/api/projects/{pid}/wbs/rooms/{room}", headers=h).status_code == 204
+    assert client.delete(f"/api/projects/{pid}/wbs/zones/{z2}", headers=h).status_code == 204
+    assert client.delete(f"/api/projects/{pid}/wbs/floors/{f2}", headers=h).status_code == 204
+    assert client.delete(f"/api/projects/{pid}/wbs/colours/{f2}", headers=h).status_code == 404
+
+
+def test_background_jobs_inline_mode(client):
+    from app import jobs
+
+    from . import import_samples as smp
+
+    assert jobs.MODE == "inline"
+    h, out = auth(client, "est@cep.test"), auth(client, "outsider@cep.test")
+    pid = client.post("/api/projects", json={"code": "J", "name": "Jobs", "currency": "PHP"}, headers=h).json()["id"]
+    v = client.post(f"/api/projects/{pid}/estimates", headers=h,
+                    json={"code": "E", "name": "E", "pricing_date": "2026-11-01"}).json()["version_id"]
+    rule = {"code": "TILE", "adapter": "takeoff_csv", "match_group": "Floor Tile", "module": "tiling",
+            "item_type": "floor_tile", "input_map": {"measured": "area"}}
+    client.post(f"/api/projects/{pid}/import-rules", json=rule, headers=h)
+    r = client.post(f"/api/projects/{pid}/versions/{v}/imports", headers=h,
+                    data={"adapter": "takeoff_csv", "source_name": "A", "source_revision": "1", "background": "true"},
+                    files={"file": ("t.csv", smp.takeoff_csv([("1", "Floor Tile", "", "", "100 m2")]), "text/csv")})
+    assert r.status_code == 202, r.text
+    job = r.json()
+    assert job["status"] == "succeeded" and job["result"]["counts"] == {"mapped": 1}
+    batch = client.get(f"/api/projects/{pid}/imports/{job['result']['batch_id']}", headers=h).json()
+    assert batch["summary"]["ready"]
+    client.post(f"/api/projects/{pid}/imports/{batch['id']}/commit", json={}, headers=h)
+
+    ex = client.post(f"/api/projects/{pid}/versions/{v}/export-jobs", json={"format": "xlsx"}, headers=h).json()
+    assert ex["status"] == "succeeded" and ex["output_name"].endswith("_draft.xlsx")
+    dl = client.get(f"/api/projects/{pid}/jobs/{ex['id']}/download", headers=h)
+    assert dl.status_code == 200 and dl.content[:2] == b"PK"
+    assert client.get(f"/api/projects/{pid}/jobs/{ex['id']}", headers=out).status_code == 404
+    assert client.post(f"/api/projects/{pid}/versions/{v}/export-jobs", json={"format": "doc"}, headers=h).status_code == 422
+
+    # A failing job records why and keeps nothing half-done.
+    bad = client.post(f"/api/projects/{pid}/versions/{v}/imports", headers=h,
+                      data={"adapter": "dxf", "source_name": "B", "source_revision": "1", "background": "true"},
+                      files={"file": ("x.dxf", b"not a drawing", "application/dxf")}).json()
+    assert bad["status"] == "failed" and "DXF" in bad["error"]
+    assert client.get(f"/api/projects/{pid}/jobs/{bad['id']}/download", headers=h).status_code == 409
+    assert len(client.get(f"/api/projects/{pid}/imports", headers=h).json()) == 1  # the failed file left no batch behind

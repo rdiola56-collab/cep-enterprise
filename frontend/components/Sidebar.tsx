@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { api, setToken, type Me, type ModuleInfo } from "@/lib/api";
+import { api, PUBLIC_PAGES, setToken, type Me, type ModuleInfo } from "@/lib/api";
 
 export default function Sidebar() {
   const path = usePathname();
@@ -12,12 +12,12 @@ export default function Sidebar() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (path === "/login") return;
+    if (PUBLIC_PAGES.includes(path)) return;
     api<Me>("/auth/me").then(setMe).catch(() => undefined);
     api<ModuleInfo[]>("/modules").then(setModules).catch((e) => setError(e.message));
   }, [path]);
 
-  if (path === "/login") return null;
+  if (PUBLIC_PAGES.includes(path)) return null;
 
   const link = (href: string, label: string, extra?: React.ReactNode) => (
     <Link
@@ -44,6 +44,7 @@ export default function Sidebar() {
         {link("/library", "Library")}
         {link("/formulas", "Formula library")}
         {link("/units", "Unit converter")}
+        {me?.global_role === "admin" && link("/admin/users", "Users")}
       </nav>
       <div className="muted mt-5 mb-1 px-2 text-[11px] font-semibold uppercase">Modules</div>
       {error && <div className="px-2 text-xs text-red-500">{error}</div>}
@@ -57,6 +58,7 @@ export default function Sidebar() {
         <div className="mt-3 border-t border-[var(--line)] px-2 pt-3 text-xs">
           <div className="truncate font-medium">{me.name}</div>
           <div className="muted truncate">{me.email} · {me.global_role.replace("_", " ")}</div>
+          <Link className="mt-2 mr-3 inline-block underline" href="/account">Account</Link>
           <button className="mt-2 underline" onClick={() => { setToken(null); window.location.href = "/login"; }}>
             Sign out
           </button>

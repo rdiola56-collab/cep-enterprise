@@ -4,7 +4,7 @@ import Link from "next/link";
 import { use, useEffect, useMemo, useState } from "react";
 import BulkEntry from "@/components/BulkEntry";
 import ItemEditor, { type EditableItem } from "@/components/ItemEditor";
-import { api, download, money, qty } from "@/lib/api";
+import { api, download, money, qty, waitForJob, type Job } from "@/lib/api";
 
 type Item = EditableItem & { trade: string; quantity: string; unit: string; unit_rate: string; amount: string };
 type BoqLine = { line_no: number; trade: string; assembly_code: string; description: string; unit: string; quantity: string; unit_rate: string; amount: string };
@@ -40,6 +40,22 @@ export default function VersionPage({ params }: { params: Promise<{ pid: string;
   }, [view, base, items]);
 
   const locked = summary !== null && summary.status !== "draft";
+  const [exporting, setExporting] = useState<string | null>(null);
+
+  // Exports run as background jobs, so a large estimate never holds the page.
+  async function exportAs(format: "xlsx" | "pdf") {
+    setError(null);
+    setExporting(format === "xlsx" ? "Preparing Excel…" : "Preparing PDF…");
+    try {
+      const job = await waitForJob(pid, await api<Job>(`${base}/export-jobs`, { method: "POST", body: JSON.stringify({ format }) }));
+      if (job.status !== "succeeded") throw new Error(job.error ?? "export failed");
+      await download(`/projects/${pid}/jobs/${job.id}/download`, job.output_name ?? `estimate.${format}`);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setExporting(null);
+    }
+  }
 
   async function act(fn: () => Promise<unknown>) {
     setError(null);
@@ -91,8 +107,9 @@ export default function VersionPage({ params }: { params: Promise<{ pid: string;
           Detailed estimate <span className="muted text-sm">({summary?.status ?? "…"})</span>
         </h1>
         {!locked && <Link className="panel px-3 py-1 text-sm" href={`${base}/import`}>Import drawings / BIM</Link>}
-        <button className="panel px-3 py-1 text-sm" onClick={() => act(() => download(`${base}/export.xlsx`, "estimate.xlsx"))}>Export Excel</button>
-        <button className="panel px-3 py-1 text-sm" onClick={() => act(() => download(`${base}/export.pdf`, "estimate.pdf"))}>Export PDF</button>
+        {exporting && <span className="muted text-sm">{exporting}</span>}
+        <button className="panel px-3 py-1 text-sm" disabled={!!exporting} onClick={() => exportAs("xlsx")}>Export Excel</button>
+        <button className="panel px-3 py-1 text-sm" disabled={!!exporting} onClick={() => exportAs("pdf")}>Export PDF</button>
         {summary?.status === "draft" && <button className="btn text-sm" onClick={() => act(() => api(`${base}/approve`, { method: "POST" }))}>Approve version</button>}
       </div>
       {error && <div className="text-sm text-red-500">{error}</div>}

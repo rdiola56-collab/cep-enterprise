@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import models as m
@@ -62,7 +62,84 @@ def wbs(s: Session, project_id: uuid.UUID) -> list[dict]:
             rooms = [{"id": str(r.id), "code": r.code, "name": r.name, "zone_id": str(r.zone_id) if r.zone_id else None}
                      for r in s.scalars(select(m.Room).where(m.Room.floor_id == f.id).order_by(m.Room.code))]
             floors.append({"id": str(f.id), "code": f.code, "name": f.name, "level": f.level, "is_basement": f.is_basement,
-                           "gross_floor_area_m2": str(f.gross_floor_area_m2) if f.gross_floor_area_m2 is not None else None,
+                           "gross_floor_area_m2": format(f.gross_floor_area_m2.normalize(), "f") if f.gross_floor_area_m2 is not None else None,
                            "zones": zones, "rooms": rooms})
         out.append({"id": str(b.id), "code": b.code, "name": b.name, "floors": floors})
     return out
+
+
+# ---------------------------------------------------------------- editing
+
+_MODELS = {"building": m.Building, "floor": m.Floor, "zone": m.Zone, "room": m.Room}
+_EDITABLE = {
+    "building": ("code", "name"),
+    "floor": ("code", "name", "level", "is_basement", "gross_floor_area_m2"),
+    "zone": ("code", "name"),
+    "room": ("code", "name", "zone_id"),
+}
+
+
+def update_node(s: Session, project_id: uuid.UUID, kind: str, node_id: uuid.UUID, changes: dict, actor: str = "system"):
+    """Rename or re-describe a WBS node. Items refer to nodes by id, so their amounts never change;
+    reports simply show the new name. A node cannot move to another parent (items record the full path)."""
+    from .audit import audit
+
+    if kind not in _MODELS:
+        raise ValueError(f"unknown WBS level '{kind}'")
+    row = _owned(s, _MODELS[kind], node_id, project_id)
+    unknown = set(changes) - set(_EDITABLE[kind])
+    if unknown:
+        raise ValueError(f"cannot change {', '.join(sorted(unknown))} of a {kind}")
+    if kind == "room" and changes.get("zone_id"):
+        zone = _owned(s, m.Zone, uuid.UUID(str(changes["zone_id"])), project_id)
+        if zone.floor_id != row.floor_id:
+            raise ValueError("the zone is on another floor")
+    for key in ("code", "name"):
+        if key in changes and not str(changes[key]).strip():
+            raise ValueError(f"{key} cannot be empty")
+    before = {k: _plain(getattr(row, k)) for k in changes}
+    for k, v in changes.items():
+        setattr(row, k, v)
+    s.flush()
+    audit(s, project_id, _MODELS[kind].__tablename__, row.id, "update", actor,
+          {"before": before, "after": {k: _plain(getattr(row, k)) for k in changes}})
+    return row
+
+
+def delete_node(s: Session, project_id: uuid.UUID, kind: str, node_id: uuid.UUID, actor: str = "system") -> None:
+    """Delete an empty WBS node. Anything still referring to it (child nodes, estimate items in any
+    version, staged import rows) blocks the delete with a count, so no estimate line loses its location."""
+    from .audit import audit
+
+    if kind not in _MODELS:
+        raise ValueError(f"unknown WBS level '{kind}'")
+    row = _owned(s, _MODELS[kind], node_id, project_id)
+    col = {"building": m.EstimateItemRecord.building_id, "floor": m.EstimateItemRecord.floor_id,
+           "zone": m.EstimateItemRecord.zone_id, "room": m.EstimateItemRecord.room_id}[kind]
+    blockers = []
+    n_items = s.scalar(select(func.count()).select_from(m.EstimateItemRecord).where(col == row.id))
+    if n_items:
+        blockers.append(f"{n_items} estimate item(s)")
+    children = {"building": [(m.Floor, m.Floor.building_id, "floor")], "floor": [(m.Zone, m.Zone.floor_id, "zone"), (m.Room, m.Room.floor_id, "room")],
+                "zone": [(m.Room, m.Room.zone_id, "room")], "room": []}[kind]
+    for model, fk, label in children:
+        n = s.scalar(select(func.count()).select_from(model).where(fk == row.id))
+        if n:
+            blockers.append(f"{n} {label}(s)")
+    if kind == "floor":
+        n = s.scalar(select(func.count()).select_from(m.ImportRow).where(m.ImportRow.floor_id == row.id))
+        if n:
+            blockers.append(f"{n} import row(s)")
+    if blockers:
+        raise NodeInUse(f"{kind} {row.code} is still used by {', '.join(blockers)}")
+    s.delete(row)
+    s.flush()
+    audit(s, project_id, _MODELS[kind].__tablename__, node_id, "delete", actor, {"code": row.code, "name": row.name})
+
+
+class NodeInUse(ValueError):
+    pass
+
+
+def _plain(v):
+    return str(v) if isinstance(v, (Decimal, uuid.UUID)) else v

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, setToken } from "@/lib/api";
 
 export default function LoginPage() {
@@ -8,6 +8,18 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [sso, setSso] = useState<{ enabled: boolean; label: string | null } | null>(null);
+  useEffect(() => { api<{ enabled: boolean; label: string | null }>("/auth/sso").then(setSso).catch(() => undefined); }, []);
+
+  async function startSso() {
+    setError(null);
+    try {
+      const r = await api<{ authorization_url: string }>("/auth/sso/start", { method: "POST" });
+      window.location.href = r.authorization_url;
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -43,6 +55,11 @@ export default function LoginPage() {
         </label>
         {error && <div className="text-sm text-red-500">{error}</div>}
         <button className="btn w-full" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
+        {sso?.enabled && <>
+          <div className="muted text-center text-xs">or</div>
+          <button type="button" className="panel w-full py-1.5 text-sm" onClick={startSso}>{sso.label}</button>
+        </>}
+        <p className="muted text-xs">Forgot your password? Ask an administrator for a reset link.</p>
       </form>
     </div>
   );
